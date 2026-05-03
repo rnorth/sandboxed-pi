@@ -1,0 +1,32 @@
+{
+  "name": "sandboxed-pi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Docker container sandbox extension for pi — all tool execution runs inside an ephemeral container",
+  "keywords": [
+    "pi",
+    "extension",
+    "sandbox",
+    "docker"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.72.1"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
