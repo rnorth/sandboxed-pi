@@ -96,13 +96,41 @@ This is non-voluntary — it uses iptables REDIRECT inside a shared network name
 ### Policy file format
 
 ```yaml
-# host: pattern1, pattern2, ...
-# Patterns are JavaScript-style regexes.
-# Default-deny: any host+path not listed is BLOCKED.
+networkPolicies:
+  - host: api.github.com
+    policies:
+      - action: DENY
+        path: /*
+        method: "*"
+      - action: ALLOW
+        path: /repos/.*
+        method: GET
+      - action: ALLOW
+        path: /users/.*
+        method: GET
 
-api.github.com: /repos/.*, /users/.*, /gists/.*
-registry.npmjs.org: /.*
+  - host: registry.npmjs.org
+    policies:
+      - action: ALLOW
+        path: /.*
+        method: "*"
 ```
+
+**Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `networkPolicies` | `NetworkPolicy[]` | Top-level array |
+| `host` | `string` | Exact hostname to match |
+| `policies` | `Rule[]` | Ordered list of allow/deny rules |
+| `action` | `"ALLOW" \| "DENY"` | Rule action |
+| `path` | `string` | JavaScript-style regex pattern |
+| `method` | `string` | HTTP method (`GET`, `POST`, `*` for all) |
+
+**Matching semantics:**
+- Rules are evaluated **top-to-bottom** (in declaration order)
+- The **last matching rule** wins (like iptables)
+- If no rule matches, the request is **DENIED** (default-deny)
 
 See [`examples/github-read-only.yaml`](./examples/github-read-only.yaml) for a working example.
 

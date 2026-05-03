@@ -10,19 +10,30 @@ MARKER_FILE="/var/run/sandboxed-pi/proxy-ready"
 CERT_DIR="/root/.mitmproxy"
 CERT_FILE="$CERT_DIR/mitmproxy-ca-cert.pem"
 
+echo "[entrypoint] Starting setup..."
+echo "[entrypoint] Policy file: $POLICY_FILE"
+
 # Set up a dedicated iptables chain for our redirects so we can flush
 # only our own rules without touching anything else in the NAT table.
 setup_iptables() {
+    echo "[entrypoint] Setting up iptables..."
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
 
-    # Create a dedicated chain and wire it into OUTPUT.
+    # Create a dedicated chain and wire it into OUTPUT only.
     # Flipping -F with no chain name only flushes the named chain, not the
     # whole table — this lets us clean up on restart without disrupting
     # other rules that might exist in the shared netns.
+    #
+    # Note: we do NOT wire SANDBOXED_PI into PREROUTING. The rules below use
+    # `-m owner` which is only valid for locally-generated traffic (OUTPUT/
+    # POSTROUTING hooks). Under iptables-nft, appending an owner-match rule
+    # to a chain referenced from PREROUTING fails with "Invalid argument",
+    # because owner can't be evaluated before a local socket is associated.
+    # In a shared netns the workload's outbound traffic traverses OUTPUT, so
+    # OUTPUT alone is sufficient.
     iptables -t nat -N SANDBOXED_PI 2>/dev/null || iptables -t nat -F SANDBOXED_PI
     iptables -t nat -A OUTPUT -j SANDBOXED_PI
-    iptables -t nat -A PREROUTING -j SANDBOXED_PI
 
     # Redirect TCP 80/443 for all non-root UIDs (exempt mitmdump's own traffic
     # so it can reach upstreams through the transparent redirect).
@@ -35,13 +46,16 @@ setup_iptables() {
         -p tcp --dport 443 \
         -m owner ! --uid-owner root \
         -j REDIRECT --to-port $PROXY_PORT
+    echo "[entrypoint] iptables rules installed"
 }
 
 # Wait for the network namespace to be ready.
 wait_for_network() {
+    echo "[entrypoint] Waiting for network..."
     local retries=10
     while [ $retries -gt 0 ]; do
         if ip addr show > /dev/null 2>&1; then
+            echo "[entrypoint] Network ready"
             return 0
         fi
         sleep 0.5
@@ -55,18 +69,31 @@ wait_for_network() {
 # by starting a short-lived mitmdump process that makes one HTTP request to
 # a known-safe host (dns.google/80) and exits.
 generate_ca_cert() {
-    local retries=20
+    echo "[entrypoint] Checking for existing CA cert at $CERT_FILE"
+    if [ -f "$CERT_FILE" ]; then
+        echo "[entrypoint] CA cert already exists, skipping generation"
+        return 0
+    fi
+    
+    echo "[entrypoint] Generating CA cert (up to 10 retries, ~5s each)..."
+    local retries=10
     while [ $retries -gt 0 ]; do
+        echo "[entrypoint] CA cert attempt $retries remaining..."
         if [ -f "$CERT_FILE" ]; then
+            echo "[entrypoint] CA cert generated successfully"
             return 0
         fi
         # Start mitmdump briefly to trigger cert generation.
-        # --no-server: exit after processing setup (no full proxy loop).
-        timeout 5 mitmdump --set confdir="$CERT_DIR" --no-server 2>/dev/null &
+        # Use --set confdir to specify cert directory.
+        # mitmdump --no-server should exit after processing options.
+        echo "[entrypoint] Running mitmdump to generate cert..."
+        timeout 10 mitmdump --set confdir="$CERT_DIR" --no-server 2>&1 &
         local pid=$!
-        sleep 2
-        kill -0 $pid 2>/dev/null && kill $pid 2>/dev/null
-        wait $pid 2>/dev/null
+        # Wait for mitmdump to generate cert files
+        sleep 3
+        echo "[entrypoint] Stopping mitmdump..."
+        kill -0 $pid 2>/dev/null && kill $pid 2>/dev/null || true
+        wait $pid 2>/dev/null || true
         retries=$((retries - 1))
     done
     echo "Warning: mitmproxy CA cert not found at $CERT_FILE after retries" >&2
@@ -74,27 +101,33 @@ generate_ca_cert() {
 
 # Cleanup function
 cleanup() {
-    echo "Cleaning up iptables rules..."
+    echo "[entrypoint] Cleaning up iptables rules..."
     iptables -t nat -F SANDBOXED_PI 2>/dev/null || true
     rm -f "$MARKER_FILE"
 }
 
 trap cleanup EXIT
 
-echo "Setting up egress proxy..."
+echo "[entrypoint] Setting up egress proxy..."
 wait_for_network
+echo "[entrypoint] Running iptables setup..."
 setup_iptables
 
-# Generate the CA cert before signalling ready so callers can copy it immediately.
+echo "[entrypoint] Running CA cert generation..."
 generate_ca_cert
 
 # Signal that setup is complete (including cert generation).
+echo "[entrypoint] Writing ready marker..."
 echo "ready" > "$MARKER_FILE"
+echo "[entrypoint] ready marker written"
 echo "iptables rules installed, CA cert ready, mitmdump starting on port $PROXY_PORT"
 
 # Run mitmdump with the policy addon.
+echo "[entrypoint] Starting mitmdump..."
 exec mitmdump \
+    --mode transparent \
     --listen-host 0.0.0.0 \
     --listen-port $PROXY_PORT \
-    -s "policy.py $POLICY_FILE" \
+    -s /usr/local/bin/policy.py \
+    --set policy_file="$POLICY_FILE" \
     -v

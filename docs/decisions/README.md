@@ -12,7 +12,8 @@ These are immutable in spirit. When a decision changes, write a new ADR that sup
 | [0002](./0002-mount-host-path-at-same-location.md) | Mount the host working directory at the same absolute path inside the container | Accepted |
 | [0003](./0003-non-root-via-custom-image.md) | Non-root execution via a custom image built per host user | Accepted |
 | [0004](./0004-fail-closed-with-opt-out.md) | Fail-closed by default, with an explicit `--no-sandbox` opt-out | Accepted |
-| [0005](./0005-egress-control-via-mitmproxy-sidecar.md) | Egress control via mitmproxy sidecar | Proposed |
+| [0005](./0005-egress-control-via-mitmproxy-sidecar.md) | Egress control via mitmproxy sidecar | Accepted |
+| [0006](./0006-redesign-egress-policy-file-format.md) | Redesign egress policy file format | Accepted |
 
 ## Format
 

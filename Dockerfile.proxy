@@ -11,10 +11,13 @@
 FROM ghcr.io/mitmproxy/mitmproxy:10
 
 # Install iptables (minimal images may not have it)
+# Also install PyYAML for the policy addon
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     procps \
     ca-certificates \
+    python3-pip \
+    && pip install --no-cache-dir pyyaml \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for policy and audit log

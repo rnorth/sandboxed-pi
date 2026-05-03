@@ -50,67 +50,120 @@ describe("parsePolicyFile", () => {
     vi.clearAllMocks();
   });
 
-  it("parses a simple host with one pattern", () => {
-    writePolicy(`example.com: /api/v.*/repos/.*`);
+  it("parses a simple host with one rule", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: ALLOW
+        path: /api/v.*/repos/.*
+        method: GET
+`);
     const policy = parsePolicyFile(tmpPolicyPath);
 
     expect(policy.file).toBe(tmpPolicyPath);
-    expect(Object.keys(policy.allowlist)).toContain("example.com");
-    expect(policy.allowlist["example.com"]).toHaveLength(1);
+    expect(policy.networkPolicies).toHaveLength(1);
+    expect(policy.networkPolicies[0].host).toBe("example.com");
+    expect(policy.networkPolicies[0].policies).toHaveLength(1);
+    expect(policy.networkPolicies[0].policies[0]).toEqual({
+      action: "ALLOW",
+      path: "/api/v.*/repos/.*",
+      method: "GET",
+    });
   });
 
-  it("parses multiple hosts and patterns", () => {
-    writePolicy(
-      "example.com: /api/v.*/repos/.*\n" +
-      "api.github.com: /repos/.*, /user",
-    );
+  it("parses multiple hosts and rules", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: DENY
+        path: /admin
+        method: "*"
+      - action: ALLOW
+        path: /.*
+        method: GET
+  - host: api.github.com
+    policies:
+      - action: ALLOW
+        path: /repos/.*
+        method: GET
+      - action: ALLOW
+        path: /users/.*
+        method: GET
+`);
     const policy = parsePolicyFile(tmpPolicyPath);
 
-
-    expect(Object.keys(policy.allowlist)).toEqual(["example.com", "api.github.com"]);
-    expect(policy.allowlist["example.com"]).toHaveLength(1);
-    expect(policy.allowlist["api.github.com"]).toHaveLength(2);
+    expect(policy.networkPolicies).toHaveLength(2);
+    expect(policy.networkPolicies[0].host).toBe("example.com");
+    expect(policy.networkPolicies[0].policies).toHaveLength(2);
+    expect(policy.networkPolicies[1].host).toBe("api.github.com");
+    expect(policy.networkPolicies[1].policies).toHaveLength(2);
   });
 
   it("ignores empty lines and comments", () => {
     writePolicy(`
       # This is a comment
-      example.com: /api/.*
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: ALLOW
+        path: /api/.*
+        method: GET
 
-      # Another comment
-      api.example.com: /users/[^/]+/gists
+  - host: api.example.com
+    policies:
+      - action: ALLOW
+        path: /users/[^/]+/gists
+        method: GET
     `);
     const policy = parsePolicyFile(tmpPolicyPath);
 
-    expect(Object.keys(policy.allowlist)).toHaveLength(2);
-    expect(policy.allowlist["example.com"]).toHaveLength(1);
-    expect(policy.allowlist["api.example.com"]).toHaveLength(1);
+    expect(policy.networkPolicies).toHaveLength(2);
+    expect(policy.networkPolicies[0].host).toBe("example.com");
+    expect(policy.networkPolicies[1].host).toBe("api.example.com");
   });
 
-  it("strips quotes from patterns", () => {
-    writePolicy(`example.com: "/api/v.*", '/users/.*'`);
-    const policy = parsePolicyFile(tmpPolicyPath);
-
-    expect(policy.allowlist["example.com"]).toContain("/api/v.*");
-    expect(policy.allowlist["example.com"]).toContain("/users/.*");
-  });
-
-  it("skips lines without a colon", () => {
-    writePolicy(`
-      example.com: /api/.*
-      not a valid line no colon here
-      api.example.com: /users/.*
-    `);
-    const policy = parsePolicyFile(tmpPolicyPath);
-
-    expect(Object.keys(policy.allowlist)).toHaveLength(2);
-  });
-
-  it("returns empty allowlist for file with only comments", () => {
+  it("returns empty networkPolicies for file with only comments", () => {
     writePolicy(`# Just a comment\n# Another one`);
     const policy = parsePolicyFile(tmpPolicyPath);
 
-    expect(Object.keys(policy.allowlist)).toHaveLength(0);
+    expect(policy.networkPolicies).toHaveLength(0);
+  });
+
+  it("skips invalid rule entries", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: ALLOW
+        path: /api/.*
+        method: GET
+      - invalid: rule
+      - action: DENY
+        path: /secret
+        method: GET
+`);
+    const policy = parsePolicyFile(tmpPolicyPath);
+
+    expect(policy.networkPolicies).toHaveLength(1);
+    expect(policy.networkPolicies[0].policies).toHaveLength(2);
+  });
+
+  it("skips rules with invalid action", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: MAYBE
+        path: /api/.*
+        method: GET
+`);
+    const policy = parsePolicyFile(tmpPolicyPath);
+
+    // Invalid rules are skipped, leaving an empty policies array
+    expect(policy.networkPolicies).toHaveLength(1);
+    expect(policy.networkPolicies[0].policies).toHaveLength(0);
   });
 });
 
@@ -120,7 +173,19 @@ describe("validatePolicy", () => {
   });
 
   it("returns valid for a well-formed policy", () => {
-    writePolicy(`example.com: /api/v.*/repos/.*\napi.github.com: /repos/.*`);
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: ALLOW
+        path: /api/v.*/repos/.*
+        method: GET
+  - host: api.github.com
+    policies:
+      - action: ALLOW
+        path: /repos/.*
+        method: GET
+`);
     const result = validatePolicy(tmpPolicyPath);
 
     expect(result.valid).toBe(true);
@@ -133,28 +198,102 @@ describe("validatePolicy", () => {
     expect(result.error).toContain("not found");
   });
 
-  it("returns invalid when file has no allowlist entries", () => {
+  it("returns invalid when file has no network policy entries", () => {
     writePolicy(`# Empty policy\n`);
     const result = validatePolicy(tmpPolicyPath);
 
     expect(result.valid).toBe(false);
-    expect(result.error).toContain("no allowlist entries");
+    expect(result.error).toContain("no network policy entries");
   });
 
-  it("returns invalid when a host has no patterns", () => {
-    writePolicy(`example.com:\ngithub.com: /repos/.*`);
+  it("returns invalid when a host has no rules", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies: []
+`);
     const result = validatePolicy(tmpPolicyPath);
 
     expect(result.valid).toBe(false);
-    expect(result.error).toContain("no allowed patterns");
+    expect(result.error).toContain("no policy rules");
   });
 
-  it("returns invalid when a pattern is not a valid regex", () => {
+  it("returns invalid when a rule has an invalid action", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: MAYBE
+        path: /api/.*
+        method: GET
+`);
+    const result = validatePolicy(tmpPolicyPath);
+
+    // Invalid action is silently skipped, resulting in empty rules
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("no policy rules");
+  });
+
+  it("returns invalid when a path is not a valid regex", () => {
     // (*.) is an unclosed group in JavaScript regex
-    writePolicy(`example.com: (*.)`);
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: DENY
+        path: (*.)
+        method: GET
+`);
     const result = validatePolicy(tmpPolicyPath);
 
     expect(result.valid).toBe(false);
     expect(result.error).toContain("Invalid regex pattern");
+  });
+
+  it("returns invalid when a rule is missing path", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: DENY
+        method: GET
+`);
+    const result = validatePolicy(tmpPolicyPath);
+
+    // Missing path is silently skipped, resulting in empty rules
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("no policy rules");
+  });
+
+  it("returns invalid when a rule is missing method", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: DENY
+        path: /.*
+`);
+    const result = validatePolicy(tmpPolicyPath);
+
+    // Missing method is silently skipped, resulting in empty rules
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("no policy rules");
+  });
+
+  it("validates method field values", () => {
+    writePolicy(`
+networkPolicies:
+  - host: example.com
+    policies:
+      - action: DENY
+        path: /.*
+        method: GET
+      - action: ALLOW
+        path: /.*
+        method: "*"
+`);
+    const result = validatePolicy(tmpPolicyPath);
+
+    expect(result.valid).toBe(true);
   });
 });
