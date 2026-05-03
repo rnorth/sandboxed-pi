@@ -11,6 +11,7 @@
  *   pi (autoloads from ~/.pi/agent/extensions/sandboxed-pi/)
  *   pi --sandbox-image ubuntu:24.04     # Custom image
  *   pi --no-sandbox                    # Disable container sandboxing
+ *   pi --egress-policy policy.yaml     # Enable egress filtering via mitmproxy
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -33,6 +34,12 @@ import {
   createDockerReadOps,
   createDockerWriteOps,
 } from "./ops.js";
+import {
+  createProxyContainer,
+  destroyProxyContainer,
+  validatePolicy,
+  tailAuditLog,
+} from "./egress.js";
 
 export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
@@ -51,6 +58,13 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
+  pi.registerFlag("egress-policy", {
+    description:
+      "Path to a policy.yaml file for egress control. When set, a mitmproxy sidecar filters outbound HTTP/HTTPS traffic.",
+    type: "string",
+    default: "",
+  });
+
   // -----------------------------------------------------------------------
   // Mutable state (resolved lazily when flags are available)
   // -----------------------------------------------------------------------
@@ -58,10 +72,11 @@ export default function (pi: ExtensionAPI) {
   type SandboxState =
     | { kind: "pending" } // before session_start has run
     | { kind: "disabled" } // user passed --no-sandbox (extension is a no-op)
-    | { kind: "active"; container: string } // container is running
+    | { kind: "active"; container: string; proxyContainer?: string } // containers are running
     | { kind: "failed"; reason: string }; // user wanted sandbox but it is not available
 
   let state: SandboxState = { kind: "pending" };
+  let auditTailer: AbortController | undefined;
 
   // -----------------------------------------------------------------------
   // Container lifecycle
@@ -76,24 +91,79 @@ export default function (pi: ExtensionAPI) {
 
     const image = (pi.getFlag("sandbox-image") as string) || "ghcr.io/catthehacker/ubuntu:act-latest";
     const cwd = ctx.cwd;
+    const policyFile = (pi.getFlag("egress-policy") as string) || "";
+
+    // If egress policy is provided, validate it before starting containers
+    if (policyFile) {
+      const validation = validatePolicy(policyFile);
+      if (!validation.valid) {
+        const msg = `Egress policy validation failed: ${validation.error}`;
+        state = { kind: "failed", reason: msg };
+        console.error(`[sandboxed-pi] ${msg}`);
+        if (ctx.hasUI) {
+          ctx.ui.notify(`Egress policy error: ${validation.error}`, "error");
+        }
+        return;
+      }
+    }
 
     try {
       await pi.exec("docker", ["info", "--format", "{{.OSType}}"], { timeout: 10 });
 
-      const container = await createSandboxContainer(image, cwd);
-      state = { kind: "active", container };
+      // Declare container outside the try so the catch block can clean it up
+      // if proxy startup fails after the workload container has started.
+      let container: string | undefined;
 
-      if (ctx.hasUI) {
-        ctx.ui.setStatus(
-          "sandbox",
-          ctx.ui.theme.fg("accent", `🐳 Container: ${container} (${image})`),
-        );
-        ctx.ui.notify(`Sandbox active: ${container} (${image})`, "info");
-      } else {
-        console.error(`[sandboxed-pi] Container active: ${container} (${image})`);
+      try {
+        container = await createSandboxContainer(image, cwd);
+        let proxyContainer: string | undefined;
+
+        // Start egress proxy sidecar if policy file is provided
+        if (policyFile) {
+          proxyContainer = await createProxyContainer(policyFile, container);
+
+          // Start audit log tailing
+          auditTailer = tailAuditLog(proxyContainer, (line) => {
+            console.error(`[sandboxed-pi] [egress] ${line}`);
+          });
+
+          if (ctx.hasUI) {
+            ctx.ui.notify(`Egress policy active: ${policyFile}`, "info");
+          }
+          console.error(`[sandboxed-pi] Egress proxy started: ${proxyContainer}`);
+        }
+
+        state = { kind: "active", container, proxyContainer };
+
+        if (ctx.hasUI) {
+          const suffix = proxyContainer ? ` | proxy: ${proxyContainer}` : "";
+          ctx.ui.setStatus(
+            "sandbox",
+            ctx.ui.theme.fg("accent", `🐳 Container: ${container} (${image})${suffix}`),
+          );
+          ctx.ui.notify(`Sandbox active: ${container} (${image})`, "info");
+        } else {
+          const suffix = proxyContainer ? ` | proxy: ${proxyContainer}` : "";
+          console.error(`[sandboxed-pi] Container active: ${container} (${image})${suffix}`);
+        }
+      } catch (innerErr) {
+        // Proxy (or nested sandbox) setup failed — clean up any workload
+        // container that was already started before bubbling up.
+        if (container) {
+          try {
+            await destroySandboxContainer(container);
+          } catch {
+            // Best-effort; log and continue so the outer catch handles the error.
+            console.error(
+              `[sandboxed-pi] Failed to clean up workload container ${container} after proxy failure`,
+            );
+          }
+        }
+        throw innerErr;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+
       state = { kind: "failed", reason: msg };
       // Always log to stderr since ui.notify may be no-op
       console.error(`[sandboxed-pi] Container init failed: ${msg}`);
@@ -108,6 +178,14 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     if (state.kind === "active") {
+      // Stop audit log tailer
+      auditTailer?.abort();
+      auditTailer = undefined;
+
+      // Destroy proxy container first (workload depends on proxy's netns)
+      if (state.proxyContainer) {
+        await destroyProxyContainer(state.proxyContainer);
+      }
       await destroySandboxContainer(state.container);
       state = { kind: "pending" };
     }
@@ -206,7 +284,6 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-
   pi.registerTool({
     ...localEdit,
     name: "edit",
@@ -289,9 +366,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event) => {
     if (state.kind === "active") {
+      const proxyNote = state.proxyContainer
+        ? ` with egress filtering (policy: ${(pi.getFlag("egress-policy") as string) || ""})`
+        : "";
       const modified = event.systemPrompt.replace(
         `Current working directory: ${localCwd}`,
-        `Current working directory: ${localCwd} (inside Docker container: ${state.container})`,
+        `Current working directory: ${localCwd} (inside Docker container: ${state.container}${proxyNote})`,
       );
       return { systemPrompt: modified };
     }
@@ -318,9 +398,12 @@ export default function (pi: ExtensionAPI) {
           const image =
             (pi.getFlag("sandbox-image") as string) || "ghcr.io/catthehacker/ubuntu:act-latest";
           const running = await isContainerRunning(state.container);
+          const proxySuffix = state.proxyContainer
+            ? ` | proxy: ${state.proxyContainer} (${(pi.getFlag("egress-policy") as string) || ""})`
+            : "";
           if (running) {
             ctx.ui.notify(
-              `🐳 Sandbox active: container=${state.container} image=${image}`,
+              `🐳 Sandbox active: container=${state.container} image=${image}${proxySuffix}`,
               "info",
             );
           } else {

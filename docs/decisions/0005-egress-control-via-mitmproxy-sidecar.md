@@ -1,8 +1,9 @@
 # ADR 0005: Egress control via mitmproxy sidecar
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-05-03
 - **Tracking issue:** [#1](https://github.com/rnorth/sandboxed-pi/issues/1)
+- **Implementation:** See `src/egress.ts`, `Dockerfile.proxy`, `policy.py`, `entrypoint.sh`
 
 ## Context
 

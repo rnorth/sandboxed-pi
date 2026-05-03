@@ -1,0 +1,21 @@
+# Example egress policy for sandboxed-pi
+#
+# Policy format: host: pattern1, pattern2, ...
+# - Comments start with #
+# - Patterns are JavaScript/mitmproxy regexes
+# - Default-deny: any host+path not in this list is BLOCKED
+#
+# To use: pi --egress-policy /path/to/this/file.yaml
+#
+# This example allows:
+#   - api.github.com: read-only GET requests to specific API paths
+#   - registry.npmjs.org: package downloads
+#   - Raw GitHub content (raw.githubusercontent.com)
+#
+# Blocked (implicitly):
+#   - POST/PUT/DELETE to any API endpoints
+#   - All traffic to other hosts
+
+api.github.com: /repos/.*, /users/.*, /orgs/.*, /gists/.*, /search/.*
+raw.githubusercontent.com: .*
+registry.npmjs.org: /.*

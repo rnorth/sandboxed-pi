@@ -1,0 +1,37 @@
+# Egress proxy container for sandboxed-pi
+#
+# This image runs mitmproxy with a policy addon that enforces an allowlist
+# on outbound HTTP/HTTPS traffic. All TCP 80/443 from the workload container
+# is redirected through this proxy via iptables REDIRECT in a shared network
+# namespace.
+#
+# The entrypoint script sets up iptables rules and then runs mitmdump with
+# the policy addon.
+
+FROM ghcr.io/mitmproxy/mitmproxy:10
+
+# Install iptables (minimal images may not have it)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iptables \
+    procps \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories for policy and audit log
+RUN mkdir -p /etc/sandboxed-pi /var/log/sandboxed-pi /var/run/sandboxed-pi
+RUN chmod 755 /etc/sandboxed-pi /var/log/sandboxed-pi /var/run/sandboxed-pi
+
+# Copy the policy addon
+COPY policy.py /usr/local/bin/policy.py
+RUN chmod +x /usr/local/bin/policy.py
+
+# Entrypoint script: set up iptables and run mitmdump
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Run as non-root user for safety
+# Note: we need to run as root for iptables, but we can drop privileges after setup
+USER root
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD []

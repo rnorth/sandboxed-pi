@@ -85,10 +85,55 @@ The image is rebuilt on first container creation, so changes take effect on the 
 |------|------|---------|-------------|
 | `--sandbox-image` | string | `ghcr.io/catthehacker/ubuntu:act-latest` | Base image used to build the per-user sandbox image |
 | `--no-sandbox` | boolean | `false` | Disable containerization; tools run on the host |
+| `--egress-policy <file>` | string | `""` | Path to a policy file for egress control (mitmproxy sidecar). See [egress control](#egress-control) for details. |
+
+## Egress control
+
+When `--egress-policy` is set, a mitmproxy sidecar container filters all outbound HTTP/HTTPS traffic from the sandbox. Requests are allowed only if the host+path matches a pattern in the policy file; everything else returns `403 Access denied by egress policy`.
+
+This is non-voluntary — it uses iptables REDIRECT inside a shared network namespace, so it intercepts traffic from tools that ignore `HTTP_PROXY` (Go binaries, statically compiled tools, anything that opens raw sockets).
+
+### Policy file format
+
+```yaml
+# host: pattern1, pattern2, ...
+# Patterns are JavaScript-style regexes.
+# Default-deny: any host+path not listed is BLOCKED.
+
+api.github.com: /repos/.*, /users/.*, /gists/.*
+registry.npmjs.org: /.*
+```
+
+See [`examples/github-read-only.yaml`](./examples/github-read-only.yaml) for a working example.
+
+### How it works
+
+```
+pi --egress-policy policy.yaml
+  ├── proxy container starts (NET_ADMIN, mitmproxy + iptables in entrypoint)
+  ├── workload container starts with --network container:<proxy>  (shared netns)
+  └── iptables REDIRECT inside that netns sends TCP 80/443 to mitmproxy:8080
+        (--uid-owner exempts the proxy's own upstream traffic)
+
+tool call → docker exec workload <cmd>
+  → kernel redirects sockets to mitmproxy (transparent, ignores HTTP_PROXY)
+    → allowlist check (host + path regex; default-deny → 403)
+    → TLS-terminate, re-encrypt to upstream
+    → audit log written to /var/log/sandboxed-pi/audit.log
+```
+
+The audit log is tailed and printed to stderr (and visible in the pi UI as info notifications) as requests are processed.
+
+### Limitations
+
+- Only HTTP/HTTPS is intercepted. Non-HTTP protocols (SSH, etc.) are not filtered.
+- DNS resolution is not intercepted — workloads can still resolve arbitrary hostnames.
+- Cert-pinned clients fail against the mitmproxy CA.
+- IPv6 traffic is not intercepted (only IPv4 iptables rules are set up).
 
 ## Roadmap
 
-- [ ] **MITM proxy sidecar** — control outbound network traffic from the container
+- [x] **MITM proxy sidecar** — control outbound network traffic from the container
 - [ ] **Resource limits** — CPU/memory constraints on the container
 - [ ] **Read-only rootfs** — only the mounted volume is writable
 

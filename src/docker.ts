@@ -244,7 +244,7 @@ export function execInContainer(
  * Execute a docker command and return stdout as a trimmed string.
  * Throws on non-zero exit.
  */
-async function dockerExecRaw(args: string[], stdin?: string): Promise<Buffer> {
+export async function dockerExecRaw(args: string[], stdin?: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, {
       stdio: ["pipe", "pipe", "pipe"],
