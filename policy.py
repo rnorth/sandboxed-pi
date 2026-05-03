@@ -52,7 +52,8 @@ class PolicyAddon:
                         continue
 
                     host = line[:colon_idx].strip()
-                    patterns_raw = line[colon_idx + 1].strip()
+                    # Use [colon_idx + 1:] (with colon) — not [colon_idx + 1] (single char).
+                    patterns_raw = line[colon_idx + 1:].strip()
 
                     # Remove surrounding brackets
                     patterns_raw = patterns_raw.lstrip("[")

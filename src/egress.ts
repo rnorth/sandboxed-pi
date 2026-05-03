@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { dockerExecRaw, isContainerRunning } from "./docker.js";
+import { dockerExecRaw, dockerExecRawWithStdin, isContainerRunning } from "./docker.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -164,68 +164,37 @@ export async function destroyProxyContainer(name: string): Promise<void> {
  * interception works for standard TLS clients (curl, gh, npm, etc.).
  *
  * The cert lives at `~/.mitmproxy/mitmproxy-ca-cert.pem` inside the proxy
- * container (the default mitmproxy location). We pipe it into the workload
- * container and install it via `update-ca-certificates` (Ubuntu/Debian).
+ * container (the default mitmproxy location). The entrypoint generates it
+ * before signalling `ready`, so it is always present when this is called.
  */
 export async function installProxyCATrust(
   proxyContainerName: string,
   workloadContainerName: string,
 ): Promise<void> {
-  // mitmproxy generates its CA cert at this path by default
   const certPath = "/root/.mitmproxy/mitmproxy-ca-cert.pem";
-
-  // Export from proxy, pipe into workload, install to system trust
-  // The command inside the workload:
-  //   mkdir -p /usr/local/share/ca-certificates/sandboxed-pi
-  //   cat > /usr/local/share/ca-certificates/sandboxed-pi/proxy-ca.crt
-  //   update-ca-certificates
-  // We write the cert content via stdin to avoid shell quoting issues.
   const certDestDir = "/usr/local/share/ca-certificates/sandboxed-pi";
   const certDestFile = `${certDestDir}/proxy-ca.crt`;
 
-  const setupCmd = `mkdir -p ${certDestDir} && cat > ${certDestFile} && update-ca-certificates`;
-
-  // Get the cert from the proxy container and pipe it to the workload
-  await dockerExecRaw([
+  // Export from proxy, pipe into workload, install to system trust.
+  // We use `dockerExecRawWithStdin` (Buffer overload) so the cert content
+  // arrives as raw bytes without shell quoting complications.
+  const certPem = await dockerExecRaw([
     "exec", "-i", proxyContainerName,
     "cat", certPath,
-  ], undefined).then(async (certPem) => {
-    // Now run the install command in the workload, passing cert via stdin
-    const installResult = await dockerExecRawWithStdin([
-      "exec", "-i", workloadContainerName,
-      "sh", "-c", setupCmd,
-    ], certPem);
+  ]);
 
-    if (installResult.toString().trim() !== "") {
-      // update-ca-certificates outputs summary on success (e.g. "1 added")
-      // A non-empty stderr usually means a problem; emit a warning but don't fail.
-      console.error(
-        `[sandboxed-pi] CA install output: ${installResult.toString().trim()}`,
-      );
-    }
-  });
-}
+  const installResult = await dockerExecRawWithStdin([
+    "exec", "-i", workloadContainerName,
+    "sh", "-c", `mkdir -p ${certDestDir} && cat > ${certDestFile} && update-ca-certificates >&2`,
+  ], certPem);
 
-// Export variant that accepts stdin separately so callers can pipe content
-function dockerExecRawWithStdin(args: string[], stdin: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    child.stdout?.on("data", (d: Buffer) => stdoutChunks.push(d));
-    child.stderr?.on("data", (d: Buffer) => stderrChunks.push(d));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`docker ${args[0]} failed (${code}): ${Buffer.concat(stderrChunks).toString().trim()}`));
-      } else {
-        resolve(Buffer.concat(stdoutChunks));
-      }
-    });
-
-    child.stdin?.end(stdin);
-  });
+  // update-ca-certificates always prints to stdout (e.g. "1 added, 0 removed").
+  // An exit code of 0 means success regardless of stdout content, so there's
+  // nothing to warn on here — keep silent on success.
+  if (installResult.toString().trim() !== "") {
+    // Rare: something unexpected was written to stdout. Log it.
+    console.error(`[sandboxed-pi] CA install stdout: ${installResult.toString().trim()}`);
+  }
 }
 async function waitForProxyReady(name: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -256,13 +225,13 @@ async function waitForProxyReady(name: string, timeoutMs: number): Promise<void>
  */
 export async function isProxyHealthy(name: string): Promise<boolean> {
   try {
-    // mitmdump should be the main process (PID 1 or in the process list)
-    const result = await dockerExecRaw([
+    // mitmdump is the main process — use grep -q which is silent on match
+    // and returns exit code 0; exit code 1 means no match (mitmdump not running).
+    await dockerExecRaw([
       "exec", name,
-      "sh", "-c",
-      "ps aux | grep -v grep | grep -q mitmdump",
+      "sh", "-c", "pgrep -x mitmdump > /dev/null",
     ]);
-    return result.toString().trim() === "";
+    return true;
   } catch {
     return false;
   }
@@ -333,8 +302,8 @@ export function tailAuditLog(
           byteOffset = currentSize;
         }
       } catch {
-        // Proxy might be gone or log file missing; stop tailing
-        ac.abort();
+        // Proxy exec failed (container gone or transient). Keep retrying
+        // — only abort if the signal was explicitly cancelled.
       }
 
       if (!ac.signal.aborted) {

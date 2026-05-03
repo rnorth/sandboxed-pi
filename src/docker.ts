@@ -244,7 +244,7 @@ export function execInContainer(
  * Execute a docker command and return stdout as a trimmed string.
  * Throws on non-zero exit.
  */
-export async function dockerExecRaw(args: string[], stdin?: string): Promise<Buffer> {
+export async function dockerExecRaw(args: string[], stdin?: string | Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -274,6 +274,12 @@ export async function dockerExecRaw(args: string[], stdin?: string): Promise<Buf
       child.stdin?.end();
     }
   });
+}
+
+// Expose the Buffer overload specifically for pipelining cert content between
+// containers, so callers don't need an explicit cast.
+export async function dockerExecRawWithStdin(args: string[], stdin: Buffer): Promise<Buffer> {
+  return dockerExecRaw(args, stdin);
 }
 
 async function waitForContainerRunning(name: string, timeoutMs: number): Promise<void> {

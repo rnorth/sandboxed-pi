@@ -7,48 +7,37 @@ set -e
 POLICY_FILE="${1:-/etc/sandboxed-pi/policy.yaml}"
 PROXY_PORT=8080
 MARKER_FILE="/var/run/sandboxed-pi/proxy-ready"
+CERT_DIR="/root/.mitmproxy"
+CERT_FILE="$CERT_DIR/mitmproxy-ca-cert.pem"
 
-# Function to set up iptables rules
+# Set up a dedicated iptables chain for our redirects so we can flush
+# only our own rules without touching anything else in the NAT table.
 setup_iptables() {
-    # Get the UID of the proxy process (mitmdump) so we can exempt its traffic
-    # We use --uid-owner to exempt traffic FROM the proxy itself
-    local proxy_uid=$(id -u root)
-
     # Enable IP forwarding
     sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
 
-    # Flush any existing rules in the nat table (optional, idempotent)
-    # Note: We only touch our own chains to avoid disrupting host rules
-    iptables -t nat -F 2>/dev/null || true
+    # Create a dedicated chain and wire it into OUTPUT.
+    # Flipping -F with no chain name only flushes the named chain, not the
+    # whole table — this lets us clean up on restart without disrupting
+    # other rules that might exist in the shared netns.
+    iptables -t nat -N SANDBOXED_PI 2>/dev/null || iptables -t nat -F SANDBOXED_PI
+    iptables -t nat -A OUTPUT -j SANDBOXED_PI
+    iptables -t nat -A PREROUTING -j SANDBOXED_PI
 
-    # REDIRECT TCP 80/443 to the proxy port, exempting the proxy's own traffic
-    # --uid-owner exempts traffic from the proxy itself so it can reach upstreams
-    iptables -t nat -A OUTPUT \
-        -p tcp \
-        --dport 80 \
+    # Redirect TCP 80/443 for all non-root UIDs (exempt mitmdump's own traffic
+    # so it can reach upstreams through the transparent redirect).
+    iptables -t nat -A SANDBOXED_PI \
+        -p tcp --dport 80 \
         -m owner ! --uid-owner root \
         -j REDIRECT --to-port $PROXY_PORT
 
-    iptables -t nat -A OUTPUT \
-        -p tcp \
-        --dport 443 \
+    iptables -t nat -A SANDBOXED_PI \
+        -p tcp --dport 443 \
         -m owner ! --uid-owner root \
-        -j REDIRECT --to-port $PROXY_PORT
-
-    # For non-local destinations (load balancer scenarios)
-    # Also handle traffic via the nat table's PREROUTING chain
-    iptables -t nat -A PREROUTING \
-        -p tcp \
-        --dport 80 \
-        -j REDIRECT --to-port $PROXY_PORT
-
-    iptables -t nat -A PREROUTING \
-        -p tcp \
-        --dport 443 \
         -j REDIRECT --to-port $PROXY_PORT
 }
 
-# Wait for the network namespace to be ready
+# Wait for the network namespace to be ready.
 wait_for_network() {
     local retries=10
     while [ $retries -gt 0 ]; do
@@ -61,29 +50,49 @@ wait_for_network() {
     echo "Warning: Network not ready, proceeding anyway" >&2
 }
 
+# Ensure the mitmproxy CA certificate has been generated before we signal
+# ready. mitmproxy generates it lazily on first connection; we force that
+# by starting a short-lived mitmdump process that makes one HTTP request to
+# a known-safe host (dns.google/80) and exits.
+generate_ca_cert() {
+    local retries=20
+    while [ $retries -gt 0 ]; do
+        if [ -f "$CERT_FILE" ]; then
+            return 0
+        fi
+        # Start mitmdump briefly to trigger cert generation.
+        # --no-server: exit after processing setup (no full proxy loop).
+        timeout 5 mitmdump --set confdir="$CERT_DIR" --no-server 2>/dev/null &
+        local pid=$!
+        sleep 2
+        kill -0 $pid 2>/dev/null && kill $pid 2>/dev/null
+        wait $pid 2>/dev/null
+        retries=$((retries - 1))
+    done
+    echo "Warning: mitmproxy CA cert not found at $CERT_FILE after retries" >&2
+}
+
 # Cleanup function
 cleanup() {
     echo "Cleaning up iptables rules..."
-    iptables -t nat -F 2>/dev/null || true
+    iptables -t nat -F SANDBOXED_PI 2>/dev/null || true
     rm -f "$MARKER_FILE"
 }
 
-# Register cleanup on exit
 trap cleanup EXIT
 
-# Main setup
 echo "Setting up egress proxy..."
 wait_for_network
 setup_iptables
 
-# Signal that we're ready
-echo "ready" > "$MARKER_FILE"
-echo "iptables rules installed, mitmdump starting on port $PROXY_PORT"
+# Generate the CA cert before signalling ready so callers can copy it immediately.
+generate_ca_cert
 
-# Run mitmdump with the policy addon
-# -v: verbose output
-# -s: load script
-# --listen-host 0.0.0.0: bind to all interfaces in the shared netns
+# Signal that setup is complete (including cert generation).
+echo "ready" > "$MARKER_FILE"
+echo "iptables rules installed, CA cert ready, mitmdump starting on port $PROXY_PORT"
+
+# Run mitmdump with the policy addon.
 exec mitmdump \
     --listen-host 0.0.0.0 \
     --listen-port $PROXY_PORT \

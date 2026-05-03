@@ -93,7 +93,7 @@ export default function (pi: ExtensionAPI) {
     const cwd = ctx.cwd;
     const policyFile = (pi.getFlag("egress-policy") as string) || "";
 
-    // If egress policy is provided, validate it before starting containers
+    // Validate egress policy before starting containers
     if (policyFile) {
       const validation = validatePolicy(policyFile);
       if (!validation.valid) {
@@ -109,63 +109,9 @@ export default function (pi: ExtensionAPI) {
 
     try {
       await pi.exec("docker", ["info", "--format", "{{.OSType}}"], { timeout: 10 });
-
-      // Declare container outside the try so the catch block can clean it up
-      // if proxy startup fails after the workload container has started.
-      let container: string | undefined;
-
-      try {
-        container = await createSandboxContainer(image, cwd);
-        let proxyContainer: string | undefined;
-
-        // Start egress proxy sidecar if policy file is provided
-        if (policyFile) {
-          proxyContainer = await createProxyContainer(policyFile, container);
-
-          // Start audit log tailing
-          auditTailer = tailAuditLog(proxyContainer, (line) => {
-            console.error(`[sandboxed-pi] [egress] ${line}`);
-          });
-
-          if (ctx.hasUI) {
-            ctx.ui.notify(`Egress policy active: ${policyFile}`, "info");
-          }
-          console.error(`[sandboxed-pi] Egress proxy started: ${proxyContainer}`);
-        }
-
-        state = { kind: "active", container, proxyContainer };
-
-        if (ctx.hasUI) {
-          const suffix = proxyContainer ? ` | proxy: ${proxyContainer}` : "";
-          ctx.ui.setStatus(
-            "sandbox",
-            ctx.ui.theme.fg("accent", `🐳 Container: ${container} (${image})${suffix}`),
-          );
-          ctx.ui.notify(`Sandbox active: ${container} (${image})`, "info");
-        } else {
-          const suffix = proxyContainer ? ` | proxy: ${proxyContainer}` : "";
-          console.error(`[sandboxed-pi] Container active: ${container} (${image})${suffix}`);
-        }
-      } catch (innerErr) {
-        // Proxy (or nested sandbox) setup failed — clean up any workload
-        // container that was already started before bubbling up.
-        if (container) {
-          try {
-            await destroySandboxContainer(container);
-          } catch {
-            // Best-effort; log and continue so the outer catch handles the error.
-            console.error(
-              `[sandboxed-pi] Failed to clean up workload container ${container} after proxy failure`,
-            );
-          }
-        }
-        throw innerErr;
-      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-
       state = { kind: "failed", reason: msg };
-      // Always log to stderr since ui.notify may be no-op
       console.error(`[sandboxed-pi] Container init failed: ${msg}`);
       if (ctx.hasUI) {
         ctx.ui.notify(
@@ -173,10 +119,82 @@ export default function (pi: ExtensionAPI) {
           "error",
         );
       }
+      return;
+    }
+
+    let container: string | undefined;
+    let proxyContainer: string | undefined;
+
+    // Create workload container
+    try {
+      container = await createSandboxContainer(image, cwd);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      state = { kind: "failed", reason: msg };
+      console.error(`[sandboxed-pi] Container init failed: ${msg}`);
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `Container sandbox init failed: ${msg}. Tools will error until you restart pi or pass --no-sandbox.`,
+          "error",
+        );
+      }
+      return;
+    }
+
+    // Create proxy sidecar if egress policy is configured
+    if (policyFile) {
+      try {
+        proxyContainer = await createProxyContainer(policyFile, container);
+
+        // Start audit log tailing
+        auditTailer = tailAuditLog(proxyContainer, (line) => {
+          console.error(`[sandboxed-pi] [egress] ${line}`);
+        });
+
+        if (ctx.hasUI) {
+          ctx.ui.notify(`Egress policy active: ${policyFile}`, "info");
+        }
+        console.error(`[sandboxed-pi] Egress proxy started: ${proxyContainer}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[sandboxed-pi] Proxy setup failed: ${msg}`);
+
+        // Clean up the workload container before transitioning to failed
+        if (container) {
+          try {
+            await destroySandboxContainer(container);
+          } catch {
+            console.error(`[sandboxed-pi] Failed to clean up workload container ${container} during proxy failure`);
+          }
+        }
+
+        state = { kind: "failed", reason: msg };
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `Egress proxy failed: ${msg}. Tools will error until you restart pi or pass --no-sandbox.`,
+            "error",
+          );
+        }
+        return;
+      }
+    }
+
+    // All containers up — transition to active state
+    state = { kind: "active", container, proxyContainer };
+
+    if (ctx.hasUI) {
+      const suffix = proxyContainer ? ` | proxy: ${proxyContainer}` : "";
+      ctx.ui.setStatus(
+        "sandbox",
+        ctx.ui.theme.fg("accent", `🐳 Container: ${container} (${image})${suffix}`),
+      );
+      ctx.ui.notify(`Sandbox active: ${container} (${image})`, "info");
+    } else {
+      const suffix = proxyContainer ? ` | proxy: ${proxyContainer}` : "";
+      console.error(`[sandboxed-pi] Container active: ${container} (${image})${suffix}`);
     }
   });
-
-  pi.on("session_shutdown", async () => {
+pi.on("session_shutdown", async () => {
     if (state.kind === "active") {
       // Stop audit log tailer
       auditTailer?.abort();
