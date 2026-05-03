@@ -16,7 +16,7 @@ For workloads we don't fully trust — LLM agents, vendor CLIs, jobs that legiti
 
 ## Decision
 
-Run **mitmproxy as a sidecar container** sharing a network namespace with the workload, with `iptables` REDIRECT inside that shared netns forcing all TCP 80/443 through the proxy. The proxy enforces a host+path allowlist.
+Run **mitmproxy as a sidecar container** sharing a network namespace with the workload, with `iptables` REDIRECT inside that shared netns forcing all TCP 80/443 through the proxy. The proxy enforces a per-host ALLOW/DENY policy.
 
 ```
 session_start
@@ -27,18 +27,54 @@ session_start
 
 tool call → docker exec workload <cmd>
   → kernel redirects sockets to mitmproxy (transparent, ignores HTTP_PROXY)
-    → allowlist check (host + path regex; default-deny → 403)
+    → policy evaluation (host + path + method; default-deny → 403)
     → TLS-terminate, re-encrypt to upstream
-    → audit log
+    → audit log written to /var/log/sandboxed-pi/audit.log
 ```
 
 Pieces:
 
 - **Proxy image** — `mitmproxy/mitmproxy` base, runs as non-root, installs iptables rules in the entrypoint.
-- **Policy file** (`policy.yaml`) — host + path-regex allowlist, default-deny. Hand-rolled YAML; no UI for v1.
-- **Addon** (`policy.py`) — ~40 lines, loaded with `mitmdump -s`. Implements the allowlist and a structured JSON audit log to stdout.
-- **Workload container** — unchanged from today, plus (a) trusts the mitmproxy CA via a per-base-image snippet, (b) launched with `--network container:<proxy>`.
-- **Activation** — opt-in via a new flag (e.g. `--egress-policy <file>`). When set, follows [ADR 0004](./0004-fail-closed-with-opt-out.md) semantics: if the proxy fails to come up, the session fails closed. Without the flag, behaviour is unchanged from today.
+- **Policy file** (`policy.yaml`) — structured YAML with per-host ALLOW/DENY rules, default-deny. See format below.
+- **Addon** (`policy.py`) — loaded with `mitmdump -s`. Evaluates the policy and writes a structured JSON audit log to `/var/log/sandboxed-pi/audit.log`.
+- **Workload container** — unchanged from today, plus (a) trusts the mitmproxy CA via `update-ca-certificates`, (b) launched with `--network container:<proxy>`.
+- **Activation** — opt-in via `--egress-policy <file>`. When set, follows [ADR 0004](./0004-fail-closed-with-opt-out.md) semantics: if the proxy fails to come up, the session fails closed. Without the flag, behaviour is unchanged.
+
+### Policy file format
+
+```yaml
+networkPolicies:
+  - host: api.github.com
+    policies:
+      - action: DENY
+        path: /.*
+        method: "*"
+      - action: ALLOW
+        path: /repos/.*
+        method: GET
+      - action: ALLOW
+        path: /users/.*
+        method: GET
+```
+
+**Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `networkPolicies` | `NetworkPolicy[]` | Top-level array |
+| `host` | `string` | Exact hostname to match |
+| `policies` | `Rule[]` | Ordered list of allow/deny rules |
+| `action` | `"ALLOW" \| "DENY"` | Rule action |
+| `path` | `string` | JavaScript-style regex matched against the request path |
+| `method` | `string` | HTTP method (`GET`, `POST`, `*` for all) |
+
+**Matching semantics:**
+- Rules are evaluated **top-to-bottom** (declaration order).
+- The **last matching rule** wins — like iptables.
+- If no rule matches, the request is **DENIED** (default-deny).
+- Hosts not listed in the policy are **DENIED**.
+
+Parsed at startup using the `yaml` npm package (safe mode) so malformed files fail before containers start.
 
 ## Consequences
 
@@ -46,26 +82,37 @@ Pieces:
 
 - Egress filtering is non-voluntary: works against tools that ignore `HTTP_PROXY`, including raw-socket binaries.
 - Path- and method-level granularity: `GET /repos/...` allowed, `DELETE /repos/...` denied.
+- Last-match-wins enables expressive policies like "allow all of GitHub, deny this one repo".
+- ALLOW/DENY rules are familiar and flexible; default-deny means new hosts require explicit opt-in.
+- Schema validation catches typos and malformed files at startup, before containers start.
 - Structured audit log of every request and policy decision falls out for free.
 
 **Negative**
 
 - New hard dependency on the proxy. A proxy crash takes the workload's network with it; container resilience ([architecture.md § Container resilience](../architecture.md#container-resilience)) gets more complex.
 - Cert-pinned clients (Go binaries with custom `tls.Config{RootCAs:...}`) fail closed against the substituted CA. Most things — `gh`, `curl`, Node, Python, JVM — honour the system trust store and work, but this is a surprise to document.
-- CA-trust install differs per language: `update-ca-certificates`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, JVM keystore. `Dockerfile.template` becomes more opinionated, with a per-base-image snippet.
+- CA-trust install requires root exec into the workload on session start; Dockerfile.template becomes more opinionated with a `update-ca-certificates` dependency.
 - IPv6 must be mirrored with `ip6tables` or disabled in the netns; forgetting this leaks AAAA-resolved traffic unintercepted.
 - The workload loses its own network namespace; anything it wants to do at the network layer (bind privileged ports, set its own iptables) now conflicts with the proxy.
 - Image-pull and startup costs grow: a second image, a second container per session.
+- Existing policy files must be migrated if the format changes.
 
 ## Alternatives considered
 
+**Proxy approach:**
 - **`HTTP_PROXY` only.** Rejected: voluntary, trivially bypassed.
 - **L3 / L4 egress firewall as the primary mechanism.** Rejected: cannot filter on path or method. Could complement an L7 proxy but is the wrong primary tool for this threat model.
 - **Envoy with Lua/Wasm filters.** Rejected for v1: more production-grade and heavier; policy authoring is significantly more verbose; cert-handling story is fiddlier. Revisit if this needs to scale across many workloads.
 - **goproxy (Go library).** Rejected: a single static binary is appealing, but we'd reinvent the policy engine, audit log, and addon framework that mitmproxy already provides.
 - **HTTP Toolkit.** Rejected: aimed at interactive debugging, not headless sidecar deployment.
-- **Istio / Linkerd egress.** Rejected: solves mTLS + L7 policy between known service identities, doesn't do token substitution, far too heavy for our threat model.
+- **Istio / Linkerd egress.** Rejected: solves mTLS + L7 policy between known service identities; far too heavy for this threat model.
 - **In-workload patching (LD_PRELOAD shim, runtime SDK swap).** Rejected: per-language, per-runtime, voluntary in the same way `HTTP_PROXY` is.
+
+**Policy format:**
+- **Hand-rolled line-by-line parser** (`host: /path1, /path2`). Rejected: no schema validation, malformed files fail silently, no DENY support, no method-level control.
+- **JSON format.** Workable but less readable for policy files with comments; YAML is more natural here.
+- **HCL / Terraform-style.** Overkill; adds a runtime dependency.
+- **TOML.** Less universally known.
 
 ## Open questions (defer to implementation)
 

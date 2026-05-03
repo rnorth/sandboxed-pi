@@ -89,7 +89,7 @@ The image is rebuilt on first container creation, so changes take effect on the 
 
 ## Egress control
 
-When `--egress-policy` is set, a mitmproxy sidecar container filters all outbound HTTP/HTTPS traffic from the sandbox. Requests are allowed only if the host+path matches a pattern in the policy file; everything else returns `403 Access denied by egress policy`.
+When `--egress-policy` is set, a mitmproxy sidecar container filters all outbound HTTP/HTTPS traffic from the sandbox. Each request is evaluated against a per-host list of ALLOW/DENY rules (last match wins); unmatched requests and unlisted hosts return `403 Access denied by egress policy`.
 
 This is non-voluntary — it uses iptables REDIRECT inside a shared network namespace, so it intercepts traffic from tools that ignore `HTTP_PROXY` (Go binaries, statically compiled tools, anything that opens raw sockets).
 
@@ -145,7 +145,7 @@ pi --egress-policy policy.yaml
 
 tool call → docker exec workload <cmd>
   → kernel redirects sockets to mitmproxy (transparent, ignores HTTP_PROXY)
-    → allowlist check (host + path regex; default-deny → 403)
+    → policy evaluation (ALLOW/DENY rules; default-deny → 403)
     → TLS-terminate, re-encrypt to upstream
     → audit log written to /var/log/sandboxed-pi/audit.log
 ```
@@ -200,13 +200,18 @@ sandboxed-pi/
 ├── src/
 │   ├── index.ts       # Extension entry point (lifecycle, tool overrides, flags)
 │   ├── docker.ts      # Low-level Docker helpers (container lifecycle, exec, image build)
-│   └── ops.ts         # Operations factories for all 7 built-in tools
+│   ├── ops.ts         # Operations factories for all 7 built-in tools
+│   └── egress.ts      # Egress proxy lifecycle, policy parsing, audit log tailing
 ├── tests/
 │   ├── ops.test.ts                  # Unit tests for operation factories
+│   ├── egress.test.ts               # Unit tests for policy parsing and validation
 │   └── docker.integration.test.ts   # Integration tests for Docker helpers
 ├── docs/
 │   ├── architecture.md              # How the system works at runtime
 │   └── decisions/                   # ADRs — why the architecture is the way it is
 ├── Dockerfile.template              # Template for the per-user sandbox image
+├── Dockerfile.proxy                 # Image for the mitmproxy egress sidecar
+├── entrypoint.sh                    # Proxy entrypoint: iptables setup + mitmdump
+├── policy.py                        # mitmproxy addon: policy evaluation + audit log
 └── package.json
 ```

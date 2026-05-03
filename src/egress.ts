@@ -5,7 +5,7 @@
  * forcing all TCP 80/443 from the workload through the proxy via
  * iptables REDIRECT inside a shared network namespace.
  *
- * See ADR-0006 for full design.
+ * See ADR-0005 for full design.
  */
 
 import { spawn } from "node:child_process";
