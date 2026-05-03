@@ -3,3 +3,4 @@
 * Follow the existing code style and patterns.
 * Write tests for new features and bug fixes, and always run tests before opening a PR.
 * Use descriptive commit messages that explain the "what" and "why" of your changes.
+* Use conventional commit-style titles for PR titles. PRs will be squashed on merge.
