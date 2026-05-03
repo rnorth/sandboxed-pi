@@ -130,24 +130,23 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Assert the sandbox container is available. Throws if not.
-   * Used by all tool overrides to fail closed.
+   * Get the container name if available. Returns null if:
+   * - no-sandbox was passed (user opted out)
+   * - container failed to initialize
    */
-  async function requireContainer(): Promise<string> {
+  async function requireContainer(): Promise<string | null> {
+    if (!sandboxEnabled) {
+      return null;
+    }
+
     const cn = getContainerName();
     if (!cn || !containerInitialized) {
-      throw new Error(
-        "[sandboxed-pi] Sandbox container is not available. " +
-        "Tool execution outside the container is not permitted. " +
-        "Start pi without --no-sandbox to enable containerization."
-      );
+      return null;
     }
 
     const running = await ensureContainerRunning(cn);
     if (!running) {
-      throw new Error(
-        `[sandboxed-pi] Sandbox container "${cn}" is not running and could not be restarted.`
-      );
+      return null;
     }
 
     return cn;
@@ -159,14 +158,23 @@ export default function (pi: ExtensionAPI) {
 
   const localCwd = process.cwd();
 
-  // All tools use this same pattern: require the container, then build a
-  // docker-based tool with the specific operations.
+  // All tools: if container is available, use docker ops. Otherwise fall back
+  // to local execution (when --no-sandbox is passed).
+
+  const localRead = createReadTool(localCwd);
+  const localWrite = createWriteTool(localCwd);
+  const localEdit = createEditTool(localCwd);
+  const localBash = createBashTool(localCwd);
+  const localLs = createLsTool(localCwd);
+  const localGrep = createGrepTool(localCwd);
+  const localFind = createFindTool(localCwd);
 
   pi.registerTool({
-    ...createReadTool(localCwd),
+    ...localRead,
     name: "read",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localRead.execute(id, params, signal, onUpdate);
       const tool = createReadTool(localCwd, {
         operations: createDockerReadOps(cn),
       });
@@ -175,10 +183,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    ...createWriteTool(localCwd),
+    ...localWrite,
     name: "write",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localWrite.execute(id, params, signal, onUpdate);
       const tool = createWriteTool(localCwd, {
         operations: createDockerWriteOps(cn),
       });
@@ -186,11 +195,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+
   pi.registerTool({
-    ...createEditTool(localCwd),
+    ...localEdit,
     name: "edit",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localEdit.execute(id, params, signal, onUpdate);
       const tool = createEditTool(localCwd, {
         operations: createDockerEditOps(cn),
       });
@@ -199,11 +210,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    ...createBashTool(localCwd),
+    ...localBash,
     name: "bash",
     label: "bash (containerized)",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localBash.execute(id, params, signal, onUpdate);
       const tool = createBashTool(localCwd, {
         operations: createDockerBashOps(cn),
       });
@@ -212,10 +224,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    ...createLsTool(localCwd),
+    ...localLs,
     name: "ls",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localLs.execute(id, params, signal, onUpdate);
       const tool = createLsTool(localCwd, {
         operations: createDockerLsOps(cn),
       });
@@ -224,10 +237,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    ...createGrepTool(localCwd),
+    ...localGrep,
     name: "grep",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localGrep.execute(id, params, signal, onUpdate);
       const tool = createGrepTool(localCwd, {
         operations: createDockerGrepOps(cn),
       });
@@ -236,10 +250,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    ...createFindTool(localCwd),
+    ...localFind,
     name: "find",
     async execute(id, params, signal, onUpdate, _ctx) {
       const cn = await requireContainer();
+      if (!cn) return localFind.execute(id, params, signal, onUpdate);
       const tool = createFindTool(localCwd, {
         operations: createDockerFindOps(cn),
       });
@@ -253,6 +268,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("user_bash", async () => {
     const cn = await requireContainer();
+    if (!cn) return;
     return { operations: createDockerBashOps(cn) };
   });
 
