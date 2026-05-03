@@ -10,16 +10,22 @@ A Docker container sandbox extension for [pi](https://github.com/badlogic/pi-cod
 
 **Transparent to the LLM.** The extension overrides all seven built-in tools using pi's pluggable operations interfaces (`ReadOperations`, `WriteOperations`, `BashOperations`, etc.). The LLM sees the same tool interface — just the execution layer is replaced.
 
+**Non-root by default.** Containers run as the host user (not root), with a custom image built to match the user's UID/GID. This ensures files created inside the container are owned by the host user, and `$USER` / `whoami` work correctly.
+
 ## Features
 
 - **Full tool containment** — bash, read, write, edit, ls, grep, find all execute via `docker exec`
 - **Ephemeral container lifecycle** — created on `session_start`, destroyed on `session_shutdown`
+- **Non-root execution** — containers run as the host user with matching UID/GID
+- **Custom user image** — builds `pi-sandbox-<user>:<uid>` with user baked in at build time
+- **Correct environment** — `HOME=/home/pi`, `USER=<name>`, `whoami` returns username
 - **Container restart** — if the container crashes mid-session, tools attempt a `docker start` before failing
 - **`!` / `!!` user commands** — also routed through the container
 - **System prompt annotation** — pi's system prompt is updated to show containerized execution
 - **Act runner image** — default image is `ghcr.io/catthehacker/ubuntu:act-latest`, giving you git, node 24, python 3, curl, jq, make, gcc, and docker CLI pre-installed
 - **Custom image support** — override with `--sandbox-image <image>`
 - **Configurable** — disable with `--no-sandbox`
+- **Customizable container** — edit `Dockerfile.template` to add packages or tools
 
 ## Quick Start
 
@@ -55,19 +61,54 @@ pi --no-sandbox
 /sandbox-status
 ```
 
+Inside the container:
+
+```bash
+whoami    # → your username (not root)
+id        # → uid=501(rnorth) gid=20(dialout) groups=20(dialout)
+echo $HOME   # → /home/pi
+echo $USER   # → rnorth
+```
+
+### Customizing the Container
+
+Edit `Dockerfile.template` to add packages, tools, or customize the environment. The template uses build arguments for the user configuration:
+
+```dockerfile
+FROM ghcr.io/catthehacker/ubuntu:act-latest
+
+# Build args: USER_NAME, USER_UID, USER_GID
+ARG USER_NAME
+ARG USER_UID
+ARG USER_GID
+
+# Add your customizations here
+RUN apt-get update && apt-get install -y my-favorite-tool
+
+# User is created automatically
+USER ${USER_NAME}
+CMD ["sleep", "infinity"]
+```
+
+The image is rebuilt on first container creation, so your changes take effect automatically.
+
 ### Roadmap
 
-- **MITM proxy sidecar** — control outbound network traffic from the container
-- **Resource limits** — CPU/memory constraints on the container
-- **Read-only rootfs** — container root filesystem is read-only, only the mounted volume is writable
+- [ ] **MITM proxy sidecar** — control outbound network traffic from the container
+- [ ] **Resource limits** — CPU/memory constraints on the container
+- [ ] **Read-only rootfs** — container root filesystem is read-only, only the mounted volume is writable
 
 ## How It Works
 
 ```
 pi session_start
   │
-  ├─► docker pull ghcr.io/catthehacker/ubuntu:act-latest
-  ├─► docker run -d --rm -v /host/pwd:/host/pwd:rw ... sleep infinity
+  ├─► getHostUser() → { name: "rnorth", uid: 501, gid: 20, home: "/Users/rnorth" }
+  │
+  ├─► buildSandboxImage() — builds custom image with user baked in
+  │     └─► docker build -t pi-sandbox-rnorth:501 (Dockerfile.template)
+  │
+  ├─► docker run -d --rm -v /host/pwd:/host/pwd:rw pi-sandbox-rnorth:501
   │
   ├─► tool call (e.g. ls)
   │     ├─► requireContainer() — checks container is alive
@@ -79,6 +120,22 @@ pi session_start
 ```
 
 The key insight: every file read, file write, shell command, directory listing, grep search, and file find is translated into a `docker exec` call. Paths are resolved by pi's tool code to absolute paths, and since the container mounts `pwd` at the same absolute path, no path translation is needed.
+
+### Image Build Process
+
+On first container creation, a custom Docker image is built:
+
+1. **Read** `Dockerfile.template` from the extension directory
+2. **Substitute** build args: `USER_NAME`, `USER_UID`, `USER_GID`
+3. **Build** image as `pi-sandbox-<user>:<uid>`
+
+The Dockerfile creates:
+- `/home/pi` as the home directory
+- A user with matching UID/GID and name
+- `ENV HOME=/home/pi` and `ENV USER=<name>`
+- `USER <name>` to set the default container user
+
+This ensures `whoami` returns the username (not root), and files created in the container are owned by the host user.
 
 ### Tools Overridden
 
@@ -98,7 +155,7 @@ The extension supports two CLI flags:
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--sandbox-image` | string | `ghcr.io/catthehacker/ubuntu:act-latest` | Docker image |
+| `--sandbox-image` | string | `ghcr.io/catthehacker/ubuntu:act-latest` | Docker image (base image for custom image build) |
 | `--no-sandbox` | boolean | `false` | Disable containerization |
 
 ## Development
@@ -121,7 +178,7 @@ npm install
 npm test
 ```
 
-Tests mock Docker — no Docker daemon required for unit tests.
+Integration tests require a running Docker daemon. Unit tests mock Docker operations.
 
 ### Project Structure
 
@@ -129,11 +186,12 @@ Tests mock Docker — no Docker daemon required for unit tests.
 sandboxed-pi/
 ├── src/
 │   ├── index.ts       # Extension entry point (lifecycle, tool overrides, flags)
-│   ├── docker.ts      # Low-level Docker helpers (container lifecycle, exec)
+│   ├── docker.ts      # Low-level Docker helpers (container lifecycle, exec, image build)
 │   └── ops.ts         # Operations factories for all 7 built-in tools
 ├── tests/
 │   ├── ops.test.ts    # Tests for operation factories
-│   └── docker.test.ts # Tests for Docker helpers
+│   └── docker.integration.test.ts # Integration tests for Docker helpers
+├── Dockerfile.template # Template for custom sandbox images
 ├── package.json       # Project metadata and scripts
 ├── tsconfig.json
 └── README.md
