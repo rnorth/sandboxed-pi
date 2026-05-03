@@ -5,7 +5,7 @@
  * running Docker daemon. Automatically skipped if Docker is unavailable.
  */
 
-import { describe, it, expect, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, afterAll, beforeAll, beforeEach } from "vitest";
 import { execSync } from "node:child_process";
 
 const { execInContainer, isContainerRunning, destroySandboxContainer, createSandboxContainer } =

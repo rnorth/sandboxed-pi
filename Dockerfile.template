@@ -1,0 +1,36 @@
+# Dockerfile template for sandboxed-pi
+# This file is customized at build time with the host user's UID/GID/name.
+# Edit this file to add packages, tools, or customize the environment.
+
+# Base image - change this to customize the container environment
+FROM ghcr.io/catthehacker/ubuntu:act-latest
+
+# Build arguments (set by the build process, not user-editable)
+ARG USER_NAME
+ARG USER_UID
+ARG USER_GID
+
+# Create /home/pi directory as the user's home
+# This avoids needing to mount the host's actual home directory
+RUN mkdir -p /home/pi && \
+    chown ${USER_UID}:${USER_GID} /home/pi
+
+# Create the user with the same UID/GID as the host user.
+# This ensures files created inside the container are owned by the host user.
+# -f: create group if it doesn't exist, or use existing group with that GID
+# -d: set home directory to /home/pi
+RUN groupadd -f -g ${USER_GID} ${USER_NAME} && \
+    useradd -u ${USER_UID} -g ${USER_GID} -d /home/pi -m -s /bin/sh ${USER_NAME}
+
+# Ensure home dir is owned correctly
+RUN chown -R ${USER_UID}:${USER_GID} /home/pi
+
+# Set HOME and USER environment variables
+ENV HOME=/home/pi
+ENV USER=${USER_NAME}
+
+# Set the default user (this is what docker run uses as the container user)
+USER ${USER_NAME}
+
+# Default command when container starts
+CMD ["sleep", "infinity"]
