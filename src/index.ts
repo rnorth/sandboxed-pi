@@ -55,9 +55,13 @@ export default function (pi: ExtensionAPI) {
   // Mutable state (resolved lazily when flags are available)
   // -----------------------------------------------------------------------
 
-  let containerName: string | null = null;
-  let sandboxEnabled = false;
-  let containerInitialized = false;
+  type SandboxState =
+    | { kind: "pending" } // before session_start has run
+    | { kind: "disabled" } // user passed --no-sandbox (extension is a no-op)
+    | { kind: "active"; container: string } // container is running
+    | { kind: "failed"; reason: string }; // user wanted sandbox but it is not available
+
+  let state: SandboxState = { kind: "pending" };
 
   // -----------------------------------------------------------------------
   // Container lifecycle
@@ -65,7 +69,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (pi.getFlag("no-sandbox") as boolean) {
-      sandboxEnabled = false;
+      state = { kind: "disabled" };
       ctx.ui.notify("Container sandbox disabled via --no-sandbox", "warning");
       return;
     }
@@ -74,47 +78,44 @@ export default function (pi: ExtensionAPI) {
     const cwd = ctx.cwd;
 
     try {
-      // Check if Docker is available
       await pi.exec("docker", ["info", "--format", "{{.OSType}}"], { timeout: 10 });
 
-      containerName = await createSandboxContainer(image, cwd);
-      sandboxEnabled = true;
-      containerInitialized = true;
+      const container = await createSandboxContainer(image, cwd);
+      state = { kind: "active", container };
 
       if (ctx.hasUI) {
         ctx.ui.setStatus(
           "sandbox",
-          ctx.ui.theme.fg("accent", `🐳 Container: ${containerName} (${image})`),
+          ctx.ui.theme.fg("accent", `🐳 Container: ${container} (${image})`),
         );
-        ctx.ui.notify(`Sandbox active: ${containerName} (${image})`, "info");
+        ctx.ui.notify(`Sandbox active: ${container} (${image})`, "info");
       } else {
-        console.error(`[sandboxed-pi] Container active: ${containerName} (${image})`);
+        console.error(`[sandboxed-pi] Container active: ${container} (${image})`);
       }
     } catch (err) {
-      sandboxEnabled = false;
       const msg = err instanceof Error ? err.message : String(err);
+      state = { kind: "failed", reason: msg };
       // Always log to stderr since ui.notify may be no-op
       console.error(`[sandboxed-pi] Container init failed: ${msg}`);
       if (ctx.hasUI) {
-        ctx.ui.notify(`Container sandbox init failed: ${msg}`, "error");
+        ctx.ui.notify(
+          `Container sandbox init failed: ${msg}. Tools will error until you restart pi or pass --no-sandbox.`,
+          "error",
+        );
       }
     }
   });
 
   pi.on("session_shutdown", async () => {
-    if (containerName) {
-      await destroySandboxContainer(containerName);
-      containerName = null;
+    if (state.kind === "active") {
+      await destroySandboxContainer(state.container);
+      state = { kind: "pending" };
     }
   });
 
   // -----------------------------------------------------------------------
   // Helpers to get operations / check readiness
   // -----------------------------------------------------------------------
-
-  function getContainerName(): string | null {
-    return containerName;
-  }
 
   async function ensureContainerRunning(name: string): Promise<boolean> {
     const running = await isContainerRunning(name);
@@ -130,26 +131,34 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Get the container name if available. Returns null if:
-   * - no-sandbox was passed (user opted out)
-   * - container failed to initialize
+   * Returns the container name to route tool calls through, or null if the
+   * user opted out via --no-sandbox. Throws if the user wanted sandboxing
+   * but it is not available — fail-closed.
    */
   async function requireContainer(): Promise<string | null> {
-    if (!sandboxEnabled) {
-      return null;
+    switch (state.kind) {
+      case "disabled":
+        return null;
+      case "pending":
+        throw new Error("Sandbox not initialized (session_start did not complete).");
+      case "failed":
+        throw new Error(
+          `Sandbox unavailable: ${state.reason}. Restart pi or pass --no-sandbox to run on the host.`,
+        );
+      case "active": {
+        const running = await ensureContainerRunning(state.container);
+        if (!running) {
+          state = {
+            kind: "failed",
+            reason: `container ${state.container} stopped and could not be restarted`,
+          };
+          throw new Error(
+            `Sandbox unavailable: ${state.reason}. Restart pi or pass --no-sandbox to run on the host.`,
+          );
+        }
+        return state.container;
+      }
     }
-
-    const cn = getContainerName();
-    if (!cn || !containerInitialized) {
-      return null;
-    }
-
-    const running = await ensureContainerRunning(cn);
-    if (!running) {
-      return null;
-    }
-
-    return cn;
   }
 
   // -----------------------------------------------------------------------
@@ -158,8 +167,10 @@ export default function (pi: ExtensionAPI) {
 
   const localCwd = process.cwd();
 
-  // All tools: if container is available, use docker ops. Otherwise fall back
-  // to local execution (when --no-sandbox is passed).
+  // For each tool: route through docker ops when the sandbox is active,
+  // fall back to the local tool when the user opted out via --no-sandbox.
+  // If the user wanted a sandbox but it is unavailable, requireContainer
+  // throws and the error propagates as a tool failure.
 
   const localRead = createReadTool(localCwd);
   const localWrite = createWriteTool(localCwd);
@@ -277,11 +288,10 @@ export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
 
   pi.on("before_agent_start", async (event) => {
-    const cn = getContainerName();
-    if (cn) {
+    if (state.kind === "active") {
       const modified = event.systemPrompt.replace(
         `Current working directory: ${localCwd}`,
-        `Current working directory: ${localCwd} (inside Docker container: ${cn})`,
+        `Current working directory: ${localCwd} (inside Docker container: ${state.container})`,
       );
       return { systemPrompt: modified };
     }
@@ -294,19 +304,30 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-status", {
     description: "Show sandbox container status",
     handler: async (_args, ctx) => {
-      const cn = getContainerName();
-      if (!cn) {
-        ctx.ui.notify("🐳 Sandbox: container not initialized", "warning");
-        return;
-      }
-      const running = await isContainerRunning(cn);
-      if (running) {
-        ctx.ui.notify(
-          `🐳 Sandbox active: container=${cn} image=${(pi.getFlag("sandbox-image") as string) || "ghcr.io/catthehacker/ubuntu:act-latest"}`,
-          "info",
-        );
-      } else {
-        ctx.ui.notify(`🐳 Sandbox: container "${cn}" not running`, "error");
+      switch (state.kind) {
+        case "pending":
+          ctx.ui.notify("🐳 Sandbox: not initialized yet", "warning");
+          return;
+        case "disabled":
+          ctx.ui.notify("🐳 Sandbox: disabled via --no-sandbox", "warning");
+          return;
+        case "failed":
+          ctx.ui.notify(`🐳 Sandbox: failed (${state.reason})`, "error");
+          return;
+        case "active": {
+          const image =
+            (pi.getFlag("sandbox-image") as string) || "ghcr.io/catthehacker/ubuntu:act-latest";
+          const running = await isContainerRunning(state.container);
+          if (running) {
+            ctx.ui.notify(
+              `🐳 Sandbox active: container=${state.container} image=${image}`,
+              "info",
+            );
+          } else {
+            ctx.ui.notify(`🐳 Sandbox: container "${state.container}" not running`, "error");
+          }
+          return;
+        }
       }
     },
   });

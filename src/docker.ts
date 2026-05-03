@@ -3,11 +3,81 @@
  */
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+
+// ---------------------------------------------------------------------------
+// Host user info
+// ---------------------------------------------------------------------------
+
+/**
+ * Host user info needed for non-root container execution.
+ */
+export interface HostUser {
+  name: string;
+  uid: number;
+  gid: number;
+  home: string;
+}
+
+/**
+ * Get the current user's info from the host system.
+ */
+export function getHostUser(): HostUser {
+  const name = process.env.USER ?? process.env.USERNAME ?? "root";
+  const uid = process.getuid?.() ?? 0;
+  const gid = process.getgid?.() ?? 0;
+  const home = process.env.HOME ?? "/root";
+  return { name, uid, gid, home };
+}
+
+// ---------------------------------------------------------------------------
+// Custom image builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a custom container image with the host user baked in.
+ * Returns the image name to use for containers.
+ */
+export async function buildSandboxImage(
+  hostUser: HostUser,
+  baseImage: string,
+  imageName: string,
+): Promise<string> {
+  // Read the Dockerfile template
+  const templatePath = resolve(__dirname, "..", "Dockerfile.template");
+  let dockerfile = readFileSync(templatePath, "utf-8");
+
+  // Replace the build arguments with actual values
+  dockerfile = dockerfile.replace(/\$\{USER_NAME\}/g, hostUser.name);
+  dockerfile = dockerfile.replace(/\$\{USER_UID\}/g, String(hostUser.uid));
+  dockerfile = dockerfile.replace(/\$\{USER_GID\}/g, String(hostUser.gid));
+  dockerfile = dockerfile.replace(/\$\{USER_HOME\}/g, hostUser.home);
+
+  // Build the Docker image
+  await dockerExecRaw([
+    "build",
+    "--build-arg", `USER_NAME=${hostUser.name}`,
+    "--build-arg", `USER_UID=${hostUser.uid}`,
+    "--build-arg", `USER_GID=${hostUser.gid}`,
+    "--build-arg", `USER_HOME=${hostUser.home}`,
+    "-t", imageName,
+    "-f", "-",
+    resolve(__dirname, ".."),
+  ], dockerfile);
+
+  return imageName;
+}
+
+// ---------------------------------------------------------------------------
+// Container lifecycle
+// ---------------------------------------------------------------------------
 
 /**
  * Create and start a sandbox container.
  * Mounts cwd at the same absolute path inside the container.
+ * Runs as the host user (not root) for safety.
  */
 export async function createSandboxContainer(
   image: string,
@@ -15,23 +85,25 @@ export async function createSandboxContainer(
   containerName?: string,
 ): Promise<string> {
   const name = containerName ?? `pi-sandboxed-${randomUUID().slice(0, 8)}`;
+  const hostUser = getHostUser();
 
-  // Ensure image is available
-  await dockerExecRaw(["pull", "-q", image]);
+  // Build custom image with the host user baked in
+  const customImage = `pi-sandbox-${hostUser.name}:${hostUser.uid}`;
+  await buildSandboxImage(hostUser, image, customImage);
 
-  // Create and start container
-  const args = [
+  // Create and start container using the custom image
+  const dockerArgs = [
     "run",
     "-d",
     "--rm",
     "--name", name,
-    "-v", `${cwd}:${cwd}:rw`,
-    image,
+    "-v", cwd + ":" + cwd + ":rw",
+    customImage,
     "sleep", "infinity",
   ];
 
-  const result = await dockerExecRaw(args);
-  const id = result.toString().trim();
+  const result = await dockerExecRaw(dockerArgs);
+  result.toString().trim(); // consumed for error checking
 
   // Verify it's running
   await waitForContainerRunning(name, 10_000);
@@ -62,6 +134,10 @@ export async function isContainerRunning(name: string): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Container exec
+// ---------------------------------------------------------------------------
+
 /**
  * Execute a command inside the container via docker exec.
  * Returns a promise that resolves with the exit code and captured output buffers.
@@ -80,10 +156,19 @@ export function execInContainer(
     timeout?: number;
     /** Whether to allow stdin for writing files */
     stdin?: string;
+    /** Run as a specific user (name or uid:gid) */
+    asUser?: string;
   },
 ): Promise<{ exitCode: number | null; stdout: Buffer; stderr: Buffer }> {
   return new Promise((resolve, reject) => {
-    const args = ["exec", "-i"];
+    const args = ["exec"];
+
+    // Pass --user if specified, so we can run as root for setup tasks if needed
+    if (options?.asUser) {
+      args.push("--user", options.asUser);
+    } else {
+      args.push("-i");
+    }
 
     if (options?.cwd) {
       args.push("-w", options.cwd);
@@ -151,14 +236,18 @@ export function execInContainer(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Execute a command and return stdout as a trimmed string.
+ * Execute a docker command and return stdout as a trimmed string.
  * Throws on non-zero exit.
  */
-async function dockerExecRaw(args: string[]): Promise<Buffer> {
+async function dockerExecRaw(args: string[], stdin?: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
     const stdoutChunks: Buffer[] = [];
@@ -177,6 +266,13 @@ async function dockerExecRaw(args: string[]): Promise<Buffer> {
         resolve(Buffer.concat(stdoutChunks));
       }
     });
+
+    // Write stdin content if provided (e.g., for docker build)
+    if (stdin !== undefined) {
+      child.stdin?.end(stdin);
+    } else {
+      child.stdin?.end();
+    }
   });
 }
 
