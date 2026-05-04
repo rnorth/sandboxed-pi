@@ -45,6 +45,18 @@ def _ip6t(*args: str, check: bool = True) -> None:
         subprocess.run(cmd, capture_output=True)
 
 
+def teardown() -> None:
+    print("[iptables] Removing rules...", file=sys.stderr)
+    subprocess.run(["iptables", "-t", "nat", "-F", "SANDBOXED_PI"], capture_output=True)
+    subprocess.run(["iptables", "-t", "filter", "-D", "OUTPUT", "-j", "SANDBOXED_PI"], capture_output=True)
+    subprocess.run(["iptables", "-t", "filter", "-F", "SANDBOXED_PI"], capture_output=True)
+    subprocess.run(["iptables", "-t", "filter", "-X", "SANDBOXED_PI"], capture_output=True)
+    subprocess.run(["ip6tables", "-D", "OUTPUT", "-j", "SANDBOXED_PI"], capture_output=True)
+    subprocess.run(["ip6tables", "-F", "SANDBOXED_PI"], capture_output=True)
+    subprocess.run(["ip6tables", "-X", "SANDBOXED_PI"], capture_output=True)
+    print("[iptables] Rules removed.", file=sys.stderr)
+
+
 def setup(proxy_port: int) -> None:
     print(f"[iptables] Setting up rules (proxy port {proxy_port})...", file=sys.stderr)
 
