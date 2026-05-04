@@ -1,6 +1,6 @@
 #!/bin/bash
 # Entrypoint for the egress proxy container.
-# Sets up iptables REDIRECT for TCP 80/443 traffic and runs mitmdump.
+# Sets up iptables rules via setup_iptables.py and runs mitmdump.
 
 set -e
 
@@ -12,66 +12,6 @@ CERT_FILE="$CERT_DIR/mitmproxy-ca-cert.pem"
 
 echo "[entrypoint] Starting setup..."
 echo "[entrypoint] Policy file: $POLICY_FILE"
-
-# Set up a dedicated iptables chain for our redirects so we can flush
-# only our own rules without touching anything else in the NAT table.
-setup_iptables() {
-    echo "[entrypoint] Setting up iptables..."
-    # Enable IP forwarding
-    sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
-
-    # Create a dedicated chain and wire it into OUTPUT only.
-    # Flipping -F with no chain name only flushes the named chain, not the
-    # whole table — this lets us clean up on restart without disrupting
-    # other rules that might exist in the shared netns.
-    #
-    # Note: we do NOT wire SANDBOXED_PI into PREROUTING. The rules below use
-    # `-m owner` which is only valid for locally-generated traffic (OUTPUT/
-    # POSTROUTING hooks). Under iptables-nft, appending an owner-match rule
-    # to a chain referenced from PREROUTING fails with "Invalid argument",
-    # because owner can't be evaluated before a local socket is associated.
-    # In a shared netns the workload's outbound traffic traverses OUTPUT, so
-    # OUTPUT alone is sufficient.
-    iptables -t nat -N SANDBOXED_PI 2>/dev/null || iptables -t nat -F SANDBOXED_PI
-    iptables -t nat -A OUTPUT -j SANDBOXED_PI
-
-    # Redirect TCP 80/443 for all non-root UIDs (exempt mitmdump's own traffic
-    # so it can reach upstreams through the transparent redirect).
-    iptables -t nat -A SANDBOXED_PI \
-        -p tcp --dport 80 \
-        -m owner ! --uid-owner root \
-        -j REDIRECT --to-port $PROXY_PORT
-
-    iptables -t nat -A SANDBOXED_PI \
-        -p tcp --dport 443 \
-        -m owner ! --uid-owner root \
-        -j REDIRECT --to-port $PROXY_PORT
-
-    # Block all non-root outbound traffic that is not going through the proxy.
-    # Without this, non-HTTP protocols (SSH, arbitrary TCP ports, UDP) would
-    # bypass egress controls entirely.
-    iptables -t filter -N SANDBOXED_PI 2>/dev/null || iptables -t filter -F SANDBOXED_PI
-    iptables -t filter -A OUTPUT -j SANDBOXED_PI
-
-    # Allow mitmproxy (root) to reach upstreams.
-    iptables -t filter -A SANDBOXED_PI -m owner --uid-owner root -j RETURN
-    # Allow loopback — workload TCP 80/443 lands here after NAT redirect.
-    iptables -t filter -A SANDBOXED_PI -o lo -j RETURN
-    # Allow DNS (UDP 53) so hostname resolution works inside the workload.
-    # DNS remains a residual side-channel; full mitigation deferred to v2.
-    iptables -t filter -A SANDBOXED_PI -p udp --dport 53 -j RETURN
-    # Drop everything else.
-    iptables -t filter -A SANDBOXED_PI -j DROP
-
-    # Block all IPv6 outbound from non-root — no IPv6 proxy support.
-    ip6tables -N SANDBOXED_PI 2>/dev/null || ip6tables -F SANDBOXED_PI
-    ip6tables -A OUTPUT -j SANDBOXED_PI
-    ip6tables -A SANDBOXED_PI -m owner --uid-owner root -j RETURN
-    ip6tables -A SANDBOXED_PI -o lo -j RETURN
-    ip6tables -A SANDBOXED_PI -j DROP
-
-    echo "[entrypoint] iptables rules installed"
-}
 
 # Wait for the network namespace to be ready.
 wait_for_network() {
@@ -141,7 +81,8 @@ trap cleanup EXIT
 echo "[entrypoint] Setting up egress proxy..."
 wait_for_network
 echo "[entrypoint] Running iptables setup..."
-setup_iptables
+sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
+python3 /usr/local/bin/setup_iptables.py "$PROXY_PORT"
 
 echo "[entrypoint] Running CA cert generation..."
 generate_ca_cert

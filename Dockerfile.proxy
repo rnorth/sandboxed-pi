@@ -24,9 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /etc/sandboxed-pi /var/log/sandboxed-pi /var/run/sandboxed-pi
 RUN chmod 755 /etc/sandboxed-pi /var/log/sandboxed-pi /var/run/sandboxed-pi
 
-# Copy the policy addon
+# Copy the policy addon and iptables setup script
 COPY policy.py /usr/local/bin/policy.py
 RUN chmod +x /usr/local/bin/policy.py
+
+COPY setup_iptables.py /usr/local/bin/setup_iptables.py
+RUN chmod +x /usr/local/bin/setup_iptables.py
 
 # Entrypoint script: set up iptables and run mitmdump
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
