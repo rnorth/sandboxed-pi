@@ -24,7 +24,7 @@ export interface HostUser {
 /**
  * Get the current user's info from the host system.
  */
-export function getHostUser(): HostUser {
+function getHostUser(): HostUser {
   const name = process.env.USER ?? process.env.USERNAME ?? "root";
   const uid = process.getuid?.() ?? 0;
   const gid = process.getgid?.() ?? 0;
@@ -40,7 +40,7 @@ export function getHostUser(): HostUser {
  * Build a custom container image with the host user baked in.
  * Returns the image name to use for containers.
  */
-export async function buildSandboxImage(
+async function buildSandboxImage(
   hostUser: HostUser,
   baseImage: string,
   imageName: string,
@@ -274,12 +274,6 @@ export async function dockerExecRaw(args: string[], stdin?: string | Buffer): Pr
       child.stdin?.end();
     }
   });
-}
-
-// Expose the Buffer overload specifically for pipelining cert content between
-// containers, so callers don't need an explicit cast.
-export async function dockerExecRawWithStdin(args: string[], stdin: Buffer): Promise<Buffer> {
-  return dockerExecRaw(args, stdin);
 }
 
 async function waitForContainerRunning(name: string, timeoutMs: number): Promise<void> {

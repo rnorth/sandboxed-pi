@@ -79,6 +79,30 @@ export default function (pi: ExtensionAPI) {
   let auditTailer: AbortController | undefined;
 
   // -----------------------------------------------------------------------
+  // Egress proxy helpers
+  // -----------------------------------------------------------------------
+
+  async function startEgressProxy(
+    policyFile: string,
+    workloadContainer: string,
+  ): Promise<{ proxyContainer: string; auditTailer: AbortController }> {
+    const proxyContainer = await createProxyContainer(policyFile, workloadContainer);
+
+    const tailer = tailAuditLog(proxyContainer, (line) => {
+      console.error(`[sandboxed-pi] [egress] ${line}`);
+    });
+
+    console.error(`[sandboxed-pi] Egress proxy started: ${proxyContainer}`);
+
+    return { proxyContainer, auditTailer: tailer };
+  }
+
+  async function stopEgressProxy(proxyContainer: string, tailer: AbortController): Promise<void> {
+    tailer.abort();
+    await destroyProxyContainer(proxyContainer);
+  }
+
+  // -----------------------------------------------------------------------
   // Container lifecycle
   // -----------------------------------------------------------------------
 
@@ -147,17 +171,13 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Starting egress proxy — iptables + CA cert setup (up to ~30s)…`, "info");
       }
       try {
-        proxyContainer = await createProxyContainer(policyFile, container);
-
-        // Start audit log tailing
-        auditTailer = tailAuditLog(proxyContainer, (line) => {
-          console.error(`[sandboxed-pi] [egress] ${line}`);
-        });
+        const result = await startEgressProxy(policyFile, container);
+        proxyContainer = result.proxyContainer;
+        auditTailer = result.auditTailer;
 
         if (ctx.hasUI) {
           ctx.ui.notify(`Egress policy active: ${policyFile}`, "info");
         }
-        console.error(`[sandboxed-pi] Egress proxy started: ${proxyContainer}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[sandboxed-pi] Proxy setup failed: ${msg}`);
@@ -197,15 +217,13 @@ export default function (pi: ExtensionAPI) {
       console.error(`[sandboxed-pi] Container active: ${container} (${image})${suffix}`);
     }
   });
-pi.on("session_shutdown", async () => {
-    if (state.kind === "active") {
-      // Stop audit log tailer
-      auditTailer?.abort();
-      auditTailer = undefined;
 
+  pi.on("session_shutdown", async () => {
+    if (state.kind === "active") {
       // Destroy proxy container first (workload depends on proxy's netns)
-      if (state.proxyContainer) {
-        await destroyProxyContainer(state.proxyContainer);
+      if (state.proxyContainer && auditTailer) {
+        await stopEgressProxy(state.proxyContainer, auditTailer);
+        auditTailer = undefined;
       }
       await destroySandboxContainer(state.container);
       state = { kind: "pending" };

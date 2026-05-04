@@ -12,101 +12,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
-import { parse as parseYaml } from "yaml";
-import { dockerExecRaw, dockerExecRawWithStdin, isContainerRunning } from "./docker.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface Rule {
-  action: "ALLOW" | "DENY";
-  path: string;
-  method: string;
-}
-
-export interface NetworkPolicy {
-  host: string;
-  policies: Rule[];
-}
-
-export interface EgressPolicy {
-  /** Path to policy.yaml file */
-  file: string;
-  /** Structured policy parsed from YAML */
-  networkPolicies: NetworkPolicy[];
-}
-
-export interface EgressState {
-  proxyContainer: string;
-  workloadContainer: string;
-}
-
-/**
- * Parse a YAML policy file using safe mode.
- *
- * Expected format:
- * ```yaml
- * networkPolicies:
- *   - host: api.github.com
- *     policies:
- *       - action: DENY
- *         path: /*
- *         method: *
- *       - action: ALLOW
- *         path: /api/someorg/*
- *         method: *
- * ```
- */
-export function parsePolicyFile(filePath: string): EgressPolicy {
-  const content = readFileSync(filePath, "utf-8");
-  const parsed = parseYaml(content) as Record<string, unknown> | null;
-
-
-  const networkPolicies: NetworkPolicy[] = [];
-
-
-  if (parsed && parsed.networkPolicies && Array.isArray(parsed.networkPolicies)) {
-    for (const entry of parsed.networkPolicies) {
-      if (typeof entry !== "object" || entry === null) continue;
-
-      const host = (entry as Record<string, unknown>).host;
-      const policies = (entry as Record<string, unknown>).policies;
-
-
-      if (typeof host !== "string" || !host) continue;
-      if (!Array.isArray(policies)) continue;
-
-
-      const rules: Rule[] = [];
-      for (const policy of policies) {
-        if (typeof policy !== "object" || policy === null) continue;
-
-
-        const action = (policy as Record<string, unknown>).action;
-        const path = (policy as Record<string, unknown>).path;
-        const method = (policy as Record<string, unknown>).method;
-
-
-        if (
-          typeof action === "string" &&
-          (action === "ALLOW" || action === "DENY") &&
-          typeof path === "string" &&
-          typeof method === "string"
-        ) {
-          rules.push({ action, path, method });
-        }
-      }
-
-
-      // Always add the networkPolicy (even with empty rules) so validatePolicy
-      // can report specific errors about missing rules
-      networkPolicies.push({ host, policies: rules });
-    }
-  }
-
-  return { file: filePath, networkPolicies };
-}
+import { dockerExecRaw, isContainerRunning } from "./docker.js";
 
 // ---------------------------------------------------------------------------
 // Proxy container image
@@ -168,10 +74,6 @@ export async function createProxyContainer(
     : resolve(process.cwd(), policyFile);
 
   console.error(`[sandboxed-pi] [egress] Starting proxy container: ${proxyContainerName}`);
-
-  // Parse policy to validate it before starting container
-  const policy = parsePolicyFile(policyFilePath);
-  console.error(`[sandboxed-pi] [egress] Policy loaded: ${policy.networkPolicies.length} network policy(ies)`);
 
   // Write policy to a location the proxy can read
   const policyDest = `/etc/sandboxed-pi/policy.yaml`;
@@ -241,9 +143,6 @@ export async function installProxyCATrust(
   const certDestFile = `${certDestDir}/proxy-ca.crt`;
 
   // Export from proxy, pipe into workload, install to system trust.
-  // We use `dockerExecRawWithStdin` (Buffer overload) so the cert content
-  // arrives as raw bytes without shell quoting complications.
-  //
   // The workload container runs as the host (non-root) user, but writing to
   // /usr/local/share/ca-certificates and running update-ca-certificates both
   // require root, so we override the exec user for this step only.
@@ -252,7 +151,7 @@ export async function installProxyCATrust(
     "cat", certPath,
   ]);
 
-  const installResult = await dockerExecRawWithStdin([
+  const installResult = await dockerExecRaw([
     "exec", "-i", "--user", "root", workloadContainerName,
     "sh", "-c", `mkdir -p ${certDestDir} && cat > ${certDestFile} && update-ca-certificates >&2`,
   ], certPem);
@@ -290,12 +189,6 @@ async function waitForProxyReady(name: string, timeoutMs: number): Promise<void>
         const logs = logsResult.toString();
         if (logs.trim()) {
           console.error(`[sandboxed-pi] [egress] Container stopped. Logs:\n${logs}`);
-        } else {
-          // Try without -f flag
-          const logsResult2 = await dockerExecRaw([
-            "logs", name,
-          ]);
-          console.error(`[sandboxed-pi] [egress] Container stopped. Logs (no -f):\n${logsResult2.toString()}`);
         }
         throw new Error(`Proxy container ${name} stopped unexpectedly`);
       }
@@ -377,23 +270,6 @@ async function waitForProxyReady(name: string, timeoutMs: number): Promise<void>
   }
 
   throw new Error(`Proxy container ${name} did not become ready within ${timeoutMs}ms`);
-}
-
-/**
- * Check if the proxy container is healthy (mitmdump is running).
- */
-export async function isProxyHealthy(name: string): Promise<boolean> {
-  try {
-    // mitmdump is the main process — use grep -q which is silent on match
-    // and returns exit code 0; exit code 1 means no match (mitmdump not running).
-    await dockerExecRaw([
-      "exec", name,
-      "sh", "-c", "pgrep -x mitmdump > /dev/null",
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -479,56 +355,9 @@ export function tailAuditLog(
 // Policy validation
 // ---------------------------------------------------------------------------
 
-/**
- * Validate that a policy file is parseable and not empty.
- */
 export function validatePolicy(filePath: string): { valid: boolean; error?: string } {
   if (!existsSync(filePath)) {
     return { valid: false, error: `Policy file not found: ${filePath}` };
   }
-
-  try {
-    const policy = parsePolicyFile(filePath);
-
-    if (policy.networkPolicies.length === 0) {
-      return { valid: false, error: "Policy file has no network policy entries" };
-    }
-
-    // Validate each network policy
-    for (const np of policy.networkPolicies) {
-      if (!np.host) {
-        return { valid: false, error: "Network policy entry missing 'host' field" };
-      }
-
-      if (!Array.isArray(np.policies) || np.policies.length === 0) {
-        return { valid: false, error: `Host '${np.host}' has no policy rules` };
-      }
-
-      // Validate each rule
-      for (const rule of np.policies) {
-        if (rule.action !== "ALLOW" && rule.action !== "DENY") {
-          return { valid: false, error: `Invalid action for host '${np.host}': ${rule.action} (must be ALLOW or DENY)` };
-        }
-
-        if (!rule.path) {
-          return { valid: false, error: `Rule missing 'path' field for host '${np.host}'` };
-        }
-
-        if (!rule.method) {
-          return { valid: false, error: `Rule missing 'method' field for host '${np.host}'` };
-        }
-
-        // Regex validation for path patterns
-        try {
-          new RegExp(rule.path);
-        } catch {
-          return { valid: false, error: `Invalid regex pattern in path for host '${np.host}': ${rule.path}` };
-        }
-      }
-    }
-
-    return { valid: true };
-  } catch (err) {
-    return { valid: false, error: `Failed to parse policy file: ${err}` };
-  }
+  return { valid: true };
 }
