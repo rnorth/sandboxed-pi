@@ -143,6 +143,9 @@ export default function (pi: ExtensionAPI) {
 
     // Create proxy sidecar if egress policy is configured
     if (policyFile) {
+      if (ctx.hasUI) {
+        ctx.ui.notify(`Starting egress proxy — iptables + CA cert setup (up to ~30s)…`, "info");
+      }
       try {
         proxyContainer = await createProxyContainer(policyFile, container);
 

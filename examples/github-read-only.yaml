@@ -20,7 +20,7 @@ networkPolicies:
     policies:
       # Default-deny all paths
       - action: DENY
-        path: /*
+        path: /.*
         method: "*"
       # Allow read-only GitHub API access
       - action: ALLOW

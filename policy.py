@@ -11,21 +11,33 @@ Policy file format (YAML):
       - host: api.github.com
         policies:
           - action: DENY
-            path: /*
-            method: *
+            path: /.*
+            method: "*"
           - action: ALLOW
-            path: /api/someorg/*
-            method: *
+            path: /api/someorg/.*
+            method: "*"
           - action: DENY
             path: /api/someorg/oneparticularrepo
-            method: *
+            method: "*"
 
 Matching semantics:
     - Rules are evaluated top-to-bottom (in declaration order).
     - The last matching rule wins (like iptables).
     - If no rule matches, the request is DENIED (default-deny).
-    - path is a JavaScript-style regex matched against flow.request.path.
+    - path is a Python regex (re module) matched with fullmatch() against the
+      path component only (query string is stripped before matching).
     - method is either '*' (match all) or an exact uppercase HTTP method.
+
+Known limitations:
+    - Host matching uses SNI (HTTPS) or the Host header (HTTP), both of which
+      are workload-controlled. A workload can direct a TCP connection to an
+      arbitrary IP while presenting an allowed SNI/Host, bypassing the hostname
+      check. Full mitigation requires DNS interception (deferred to v2).
+    - Only TCP 80/443 is intercepted (iptables REDIRECT). Non-standard ports
+      and IPv6 are outside the current scope.
+    - WebSocket connections: only the initial HTTP upgrade request is checked
+      by this addon. Frames after the upgrade are not inspected — mitmproxy
+      exposes them via websocket_message(), which this addon does not implement.
 """
 
 import sys
@@ -188,7 +200,8 @@ class PolicyAddon:
     def request(self, flow: http.HTTPFlow) -> None:
         """Handle request — do allowlist check after headers are loaded."""
         host = flow.request.pretty_host
-        path = flow.request.path
+        # Strip query string — policy rules match only the path component.
+        path = flow.request.path.split("?")[0]
         method = flow.request.method
 
         # Check policies
@@ -229,7 +242,7 @@ class PolicyAddon:
             for rule in np["rules"]:
                 if rule["method"] != "*" and rule["method"] != method:
                     continue
-                if rule["path"].search(path):
+                if rule["path"].fullmatch(path):
                     last_match = rule["action"]
 
         return last_match

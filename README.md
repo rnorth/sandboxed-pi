@@ -100,7 +100,7 @@ networkPolicies:
   - host: api.github.com
     policies:
       - action: DENY
-        path: /*
+        path: /.*
         method: "*"
       - action: ALLOW
         path: /repos/.*
@@ -124,7 +124,7 @@ networkPolicies:
 | `host` | `string` | Exact hostname to match |
 | `policies` | `Rule[]` | Ordered list of allow/deny rules |
 | `action` | `"ALLOW" \| "DENY"` | Rule action |
-| `path` | `string` | JavaScript-style regex pattern |
+| `path` | `string` | Python regex (`re` module, `fullmatch`) — matched against the path only, query string excluded |
 | `method` | `string` | HTTP method (`GET`, `POST`, `*` for all) |
 
 **Matching semantics:**
@@ -156,6 +156,8 @@ The audit log is tailed and printed to stderr (and visible in the pi UI as info 
 
 - Only HTTP/HTTPS is intercepted. Non-HTTP protocols (SSH, etc.) are not filtered.
 - DNS resolution is not intercepted — workloads can still resolve arbitrary hostnames.
+- Host matching uses the TLS SNI / `Host` header, both workload-controlled. A workload can direct traffic to an arbitrary IP while presenting an allowed hostname. Full mitigation requires DNS interception (planned for v2).
+- WebSocket connections are only policy-checked at the initial HTTP upgrade request. Frames sent after the upgrade are not inspected — a workload can use an allowed WebSocket endpoint as an arbitrary data channel.
 - Cert-pinned clients fail against the mitmproxy CA.
 - IPv6 traffic is not intercepted (only IPv4 iptables rules are set up).
 

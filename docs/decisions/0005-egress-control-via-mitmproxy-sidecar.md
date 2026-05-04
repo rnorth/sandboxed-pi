@@ -65,7 +65,7 @@ networkPolicies:
 | `host` | `string` | Exact hostname to match |
 | `policies` | `Rule[]` | Ordered list of allow/deny rules |
 | `action` | `"ALLOW" \| "DENY"` | Rule action |
-| `path` | `string` | JavaScript-style regex matched against the request path |
+| `path` | `string` | Python regex (`re` module, `fullmatch`) matched against the path component (query string excluded) |
 | `method` | `string` | HTTP method (`GET`, `POST`, `*` for all) |
 
 **Matching semantics:**
@@ -93,6 +93,7 @@ Parsed at startup using the `yaml` npm package (safe mode) so malformed files fa
 - Cert-pinned clients (Go binaries with custom `tls.Config{RootCAs:...}`) fail closed against the substituted CA. Most things — `gh`, `curl`, Node, Python, JVM — honour the system trust store and work, but this is a surprise to document.
 - CA-trust install requires root exec into the workload on session start; Dockerfile.template becomes more opinionated with a `update-ca-certificates` dependency.
 - IPv6 must be mirrored with `ip6tables` or disabled in the netns; forgetting this leaks AAAA-resolved traffic unintercepted.
+- **Host matching is workload-controllable.** Policy host lookup uses the TLS SNI (HTTPS) or `Host` header (HTTP), both supplied by the workload. A workload can direct TCP to an arbitrary IP while presenting an allowed SNI/Host, routing traffic through the proxy to an unintended server. Full mitigation requires DNS interception (deferred to v2 — see Out of scope).
 - The workload loses its own network namespace; anything it wants to do at the network layer (bind privileged ports, set its own iptables) now conflicts with the proxy.
 - Image-pull and startup costs grow: a second image, a second container per session.
 - Existing policy files must be migrated if the format changes.
@@ -117,7 +118,7 @@ Parsed at startup using the `yaml` npm package (safe mode) so malformed files fa
 ## Open questions (defer to implementation)
 
 - **Secret source at proxy startup.** Env vars are fine for v1; production-style use wants Vault / cloud metadata / a file-mounted secret manager. (Token substitution — see Out of scope — will need this designed properly.)
-- **WebSocket / SSE.** mitmproxy supports both but addon hooks differ. Defer for v1.
+- **WebSocket / SSE.** mitmproxy supports both but addon hooks differ. The initial HTTP upgrade request is policy-checked, but subsequent WebSocket frames are not — a workload can use an allowed WebSocket endpoint as an arbitrary data channel. Defer frame-level enforcement to v1.x.
 - **k8s deployment.** The `--network container:<proxy>` pattern translates to a sidecar + initContainer setting up iptables in the pod netns. Separate spike.
 - **Streaming responses.** mitmproxy buffers in `response()` by default. Move to streaming hooks if it bites us; not relevant for typical API calls.
 
@@ -128,4 +129,4 @@ Parsed at startup using the `yaml` npm package (safe mode) so malformed files fa
 - Web UI for policy authoring.
 - Mutual TLS to upstreams.
 - **Token substitution.** Real credentials still reach the workload. This is a meaningful gap for high-sensitivity workloads; defer tokenization to v2 once the core egress-filter loop is validated.
-- **DNS interception / outbound UDP/53 blocking.** DNS remains a residual side channel — workloads can still resolve arbitrary hostnames. Mitigate in v2 by running a resolver in the sidecar and DROP-ing outbound UDP/53.
+- **DNS interception / outbound UDP/53 blocking.** DNS remains a residual side channel — workloads can still resolve arbitrary hostnames. Mitigate in v2 by running a resolver in the sidecar and DROP-ing outbound UDP/53. DNS interception also closes the SNI-spoofing vector described in the Negative consequences above, since resolved IPs can then be cross-checked against the policy hostname at the L4 level.
