@@ -124,7 +124,7 @@ Parsed at startup using the `yaml` npm package (safe mode) so malformed files fa
 
 ## Out of scope (v1)
 
-- Non-HTTP protocols.
+- **Non-HTTP protocol filtering.** Non-HTTP traffic is blocked by iptables DROP rules (not passed through), but it is not inspected — SSH, arbitrary TCP ports, raw UDP, and IPv6 cannot be selectively allowed.
 - Per-request rate limiting.
 - Web UI for policy authoring.
 - Mutual TLS to upstreams.

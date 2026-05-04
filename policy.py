@@ -33,8 +33,8 @@ Known limitations:
       are workload-controlled. A workload can direct a TCP connection to an
       arbitrary IP while presenting an allowed SNI/Host, bypassing the hostname
       check. Full mitigation requires DNS interception (deferred to v2).
-    - Only TCP 80/443 is intercepted (iptables REDIRECT). Non-standard ports
-      and IPv6 are outside the current scope.
+    - Only TCP 80/443 is intercepted and policy-filtered. All other outbound
+      traffic is blocked by iptables DROP rules in the sidecar entrypoint.
     - WebSocket connections: only the initial HTTP upgrade request is checked
       by this addon. Frames after the upgrade are not inspected — mitmproxy
       exposes them via websocket_message(), which this addon does not implement.

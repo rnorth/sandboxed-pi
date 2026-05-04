@@ -46,6 +46,30 @@ setup_iptables() {
         -p tcp --dport 443 \
         -m owner ! --uid-owner root \
         -j REDIRECT --to-port $PROXY_PORT
+
+    # Block all non-root outbound traffic that is not going through the proxy.
+    # Without this, non-HTTP protocols (SSH, arbitrary TCP ports, UDP) would
+    # bypass egress controls entirely.
+    iptables -t filter -N SANDBOXED_PI 2>/dev/null || iptables -t filter -F SANDBOXED_PI
+    iptables -t filter -A OUTPUT -j SANDBOXED_PI
+
+    # Allow mitmproxy (root) to reach upstreams.
+    iptables -t filter -A SANDBOXED_PI -m owner --uid-owner root -j RETURN
+    # Allow loopback — workload TCP 80/443 lands here after NAT redirect.
+    iptables -t filter -A SANDBOXED_PI -o lo -j RETURN
+    # Allow DNS (UDP 53) so hostname resolution works inside the workload.
+    # DNS remains a residual side-channel; full mitigation deferred to v2.
+    iptables -t filter -A SANDBOXED_PI -p udp --dport 53 -j RETURN
+    # Drop everything else.
+    iptables -t filter -A SANDBOXED_PI -j DROP
+
+    # Block all IPv6 outbound from non-root — no IPv6 proxy support.
+    ip6tables -N SANDBOXED_PI 2>/dev/null || ip6tables -F SANDBOXED_PI
+    ip6tables -A OUTPUT -j SANDBOXED_PI
+    ip6tables -A SANDBOXED_PI -m owner --uid-owner root -j RETURN
+    ip6tables -A SANDBOXED_PI -o lo -j RETURN
+    ip6tables -A SANDBOXED_PI -j DROP
+
     echo "[entrypoint] iptables rules installed"
 }
 
@@ -103,6 +127,12 @@ generate_ca_cert() {
 cleanup() {
     echo "[entrypoint] Cleaning up iptables rules..."
     iptables -t nat -F SANDBOXED_PI 2>/dev/null || true
+    iptables -t filter -D OUTPUT -j SANDBOXED_PI 2>/dev/null || true
+    iptables -t filter -F SANDBOXED_PI 2>/dev/null || true
+    iptables -t filter -X SANDBOXED_PI 2>/dev/null || true
+    ip6tables -D OUTPUT -j SANDBOXED_PI 2>/dev/null || true
+    ip6tables -F SANDBOXED_PI 2>/dev/null || true
+    ip6tables -X SANDBOXED_PI 2>/dev/null || true
     rm -f "$MARKER_FILE"
 }
 
