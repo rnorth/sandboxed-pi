@@ -47,13 +47,13 @@ def _ip6t(*args: str, check: bool = True) -> None:
 
 def teardown() -> None:
     print("[iptables] Removing rules...", file=sys.stderr)
-    subprocess.run(["iptables", "-t", "nat", "-F", "SANDBOXED_PI"], capture_output=True)
-    subprocess.run(["iptables", "-t", "filter", "-D", "OUTPUT", "-j", "SANDBOXED_PI"], capture_output=True)
-    subprocess.run(["iptables", "-t", "filter", "-F", "SANDBOXED_PI"], capture_output=True)
-    subprocess.run(["iptables", "-t", "filter", "-X", "SANDBOXED_PI"], capture_output=True)
-    subprocess.run(["ip6tables", "-D", "OUTPUT", "-j", "SANDBOXED_PI"], capture_output=True)
-    subprocess.run(["ip6tables", "-F", "SANDBOXED_PI"], capture_output=True)
-    subprocess.run(["ip6tables", "-X", "SANDBOXED_PI"], capture_output=True)
+    _ipt("-t", "nat", "-F", "SANDBOXED_PI", check=False)
+    _ipt("-t", "filter", "-D", "OUTPUT", "-j", "SANDBOXED_PI", check=False)
+    _ipt("-t", "filter", "-F", "SANDBOXED_PI", check=False)
+    _ipt("-t", "filter", "-X", "SANDBOXED_PI", check=False)
+    _ip6t("-D", "OUTPUT", "-j", "SANDBOXED_PI", check=False)
+    _ip6t("-F", "SANDBOXED_PI", check=False)
+    _ip6t("-X", "SANDBOXED_PI", check=False)
     print("[iptables] Rules removed.", file=sys.stderr)
 
 
