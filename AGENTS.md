@@ -5,4 +5,5 @@
 * Use descriptive commit messages that explain the "what" and "why" of your changes.
 * Use conventional commit-style titles for PR titles. PRs will be squashed on merge.
 * Before making any changes, check the open issues/PRs to see if there is already work being done on the same area. 
-* Also, before making changes, we typically create an ADR document in `/docs/decisions` to outline the design of the change and get feedback - as a draft PR - before implementation. See existing ADRs for examples.
+* Feature documentation lives in `docs/`. Each doc covers a feature end-to-end (how it works + why it was designed that way) and is updated in place as the feature evolves. See `docs/architecture.md` for an overview and links to the individual feature docs.
+* When proposing a significant change: open a **draft PR containing only documentation changes** for discussion. Once the approach is agreed on, implementation follows in a separate PR.

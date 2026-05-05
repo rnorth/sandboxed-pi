@@ -168,9 +168,13 @@ The audit log is tailed and printed to stderr (and visible in the pi UI as info 
 
 ## How it works
 
-For the runtime mechanics — lifecycle hooks, the path a tool call takes, error handling — see [docs/architecture.md](./docs/architecture.md).
+For runtime mechanics and design rationale, see the feature docs:
 
-For the *why* behind the design — containment model, path mounting, non-root execution, fail-closed default — see the [Architecture Decision Records](./docs/decisions/README.md).
+- [Container sandbox](./docs/container-sandbox.md) — containment model, session lifecycle, tool-call flow, container resilience, fail-closed
+- [Container configuration](./docs/container-configuration.md) — path mounting, non-root execution
+- [Egress control](./docs/egress-control.md) — mitmproxy sidecar, policy format, limitations
+
+For a high-level orientation, see [docs/architecture.md](./docs/architecture.md).
 
 ## Development
 
@@ -208,11 +212,15 @@ sandboxed-pi/
 │   ├── egress.test.ts               # Unit tests for policy parsing and validation
 │   └── docker.integration.test.ts   # Integration tests for Docker helpers
 ├── docs/
-│   ├── architecture.md              # How the system works at runtime
-│   └── decisions/                   # ADRs — why the architecture is the way it is
+│   ├── architecture.md              # High-level orientation and links to feature docs
+│   ├── container-sandbox.md         # Containment model, lifecycle, tool-call flow
+│   ├── container-configuration.md   # Path mounting, non-root execution
+│   └── egress-control.md            # mitmproxy sidecar, policy format, limitations
+├── proxy/
+│   ├── Dockerfile                   # Image for the mitmproxy egress sidecar
+│   ├── entrypoint.py                # Proxy entrypoint: iptables setup + mitmproxy launch
+│   ├── policy.py                    # mitmproxy addon: policy evaluation + audit log
+│   └── setup_iptables.py            # iptables/ip6tables REDIRECT rule setup
 ├── Dockerfile.template              # Template for the per-user sandbox image
-├── Dockerfile.proxy                 # Image for the mitmproxy egress sidecar
-├── entrypoint.sh                    # Proxy entrypoint: iptables setup + mitmdump
-├── policy.py                        # mitmproxy addon: policy evaluation + audit log
 └── package.json
 ```
