@@ -96,6 +96,34 @@ class TestDnsInterceptorRouting:
         response = interceptor._handle(request)
         assert fake_upstream.called
 
+    def test_nxdomain_decision_is_audited(self):
+        import tempfile
+        import json
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            audit_path = f.name
+
+        try:
+            cache = BindingCache()
+            interceptor = DnsInterceptor(
+                allowed_hosts=self.ALLOWED_HOSTS,
+                cache=cache,
+                audit_log_path=audit_path,
+                audit_lock=threading.Lock(),
+                upstream=FakeUpstream(None),
+            )
+            request = dnslib.DNSRecord.question("evil.com", "A")
+            interceptor._handle(request)
+
+            with open(audit_path) as f:
+                lines = [l for l in f if l.strip()]
+            assert len(lines) == 1
+            entry = json.loads(lines[0])
+            assert entry["decision"] == "DNS-DENY"
+            assert entry["name"] == "evil.com"
+        finally:
+            import os
+            os.unlink(audit_path)
+
     def test_upstream_error_returns_servfail(self):
         cache = BindingCache()
         broken = DnsInterceptor(

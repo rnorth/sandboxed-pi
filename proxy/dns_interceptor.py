@@ -129,5 +129,6 @@ class DnsInterceptor:
             try:
                 with open(self._audit_log_path, "a") as f:
                     f.write(entry + "\n")
-            except OSError:
-                pass
+            except OSError as e:
+                import sys
+                print(f"[sandboxed-pi] audit write failed: {e}", file=sys.stderr)
