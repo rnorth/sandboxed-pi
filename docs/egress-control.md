@@ -104,8 +104,8 @@ See [`examples/github-read-only.yaml`](../examples/github-read-only.yaml) for a 
 All non-root UDP 53 traffic from the workload is redirected by iptables to
 a DNS interceptor running inside the proxy process. The interceptor:
 
-- Forwards A, CNAME, MX, TXT, SRV, and other query types to the upstream
-  resolver only for hostnames in the policy host list.
+- Forwards all non-AAAA, non-PTR query types to the upstream resolver,
+  but only for hostnames in the policy host list.
 - Caches the A record IPs returned for each hostname.
 - Returns NXDOMAIN for hostnames not in the policy, blocking DNS exfiltration
   via attacker-controlled names.
