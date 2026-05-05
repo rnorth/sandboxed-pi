@@ -40,19 +40,12 @@ Known limitations:
       exposes them via websocket_message(), which this addon does not implement.
 """
 
-import sys
 import re
 import json
 from datetime import datetime
 from typing import Optional
 
-try:
-    import yaml
-    YAML_AVAILABLE = True
-except ImportError:
-    YAML_AVAILABLE = False
-    print("Warning: PyYAML not available, falling back to basic parsing", file=sys.stderr)
-
+import yaml
 from mitmproxy import http, ctx
 
 
@@ -83,10 +76,7 @@ class PolicyAddon:
         self.network_policies = []
         try:
             with open(self.policy_file, "r") as f:
-                if YAML_AVAILABLE:
-                    content = yaml.safe_load(f)
-                else:
-                    content = self._basic_parse(f)
+                content = yaml.safe_load(f)
 
             if not content or "networkPolicies" not in content:
                 ctx.log.error("Policy file must contain 'networkPolicies' key")
@@ -131,54 +121,6 @@ class PolicyAddon:
         except Exception as e:
             ctx.log.error(f"Failed to load policy file: {e}")
             raise
-
-    def _basic_parse(self, f) -> dict:
-        """Fallback basic YAML parser when PyYAML is not available."""
-        result = {"networkPolicies": []}
-        current_entry = None
-        current_policies = []
-        in_policies = False
-
-        for line in f:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-
-            # Simple indentation-based parsing
-            indent = len(line) - len(line.lstrip())
-            if indent == 0:
-                if current_entry:
-                    if current_policies:
-                        current_entry["policies"] = current_policies
-                    result["networkPolicies"].append(current_entry)
-                current_entry = {"host": stripped.rstrip(":")}
-                current_policies = []
-                in_policies = False
-            elif indent == 2 and "policies:" in stripped:
-                in_policies = True
-            elif indent == 4 and in_policies:
-                if stripped.startswith("-"):
-                    rule = {}
-                    current_policies.append(rule)
-                elif ":" in stripped:
-                    key, value = stripped.split(":", 1)
-                    key = key.strip().lstrip("- ")
-                    value = value.strip()
-                    if current_policies:
-                        current_policies[-1][key] = value
-            elif indent == 6 and current_policies:
-                if ":" in stripped:
-                    key, value = stripped.split(":", 1)
-                    key = key.strip()
-                    value = value.strip()
-                    current_policies[-1][key] = value
-
-        if current_entry:
-            if current_policies:
-                current_entry["policies"] = current_policies
-            result["networkPolicies"].append(current_entry)
-
-        return result
 
     def _audit(self, decision: str, host: str, path: str, method: str) -> None:
         """Write a structured audit log entry."""
