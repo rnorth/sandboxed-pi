@@ -99,11 +99,41 @@ Considered policy format alternatives:
 
 See [`examples/github-read-only.yaml`](../examples/github-read-only.yaml) for a working example.
 
+## DNS interception
+
+All non-root UDP 53 traffic from the workload is redirected by iptables to
+a DNS interceptor running inside the proxy process. The interceptor:
+
+- Forwards A, CNAME, MX, TXT, SRV, and other query types to the upstream
+  resolver only for hostnames in the policy host list.
+- Caches the A record IPs returned for each hostname.
+- Returns NXDOMAIN for hostnames not in the policy, blocking DNS exfiltration
+  via attacker-controlled names.
+- Returns NODATA for AAAA queries (IPv6 is blocked at the firewall; NODATA
+  causes immediate fallback to A rather than a failed connect attempt).
+- Returns NXDOMAIN for PTR queries (reverse-IP names don't fit the policy
+  schema).
+
+The cached IP↔hostname bindings are then used by the mitmproxy request hook
+to verify that each connection's destination IP was legitimately resolved for
+the Host/SNI the workload is presenting (see IP-binding enforcement above).
+
+**Audit log tags:** `DNS-ALLOW` and `DNS-DENY` appear alongside the existing
+`ALLOW`/`DENY` entries. `DENY` entries from the binding check include a
+`"reason": "ip-not-bound-to-host"` field.
+
 ## Limitations
 
 - Only HTTP/HTTPS traffic is policy-filtered. All other outbound traffic (non-standard TCP ports, SSH, raw UDP, IPv6) is blocked at the firewall — not passed through unfiltered.
-- DNS (UDP 53) is allowed so hostname resolution works inside the workload, and remains a residual side-channel. Full mitigation (DNS interception + blocking) planned for a future version.
-- **Host matching is workload-controllable.** Policy host lookup uses the TLS SNI / `Host` header, both supplied by the workload. A workload can direct traffic to an arbitrary IP while presenting an allowed hostname. Full mitigation requires DNS interception (planned for a future version).
+- DNS (UDP 53) is intercepted and filtered: only hostnames in the policy
+  may be resolved. All other queries return NXDOMAIN, closing the DNS
+  exfiltration side-channel. AAAA queries return NODATA (IPv6 is blocked
+  at the firewall). PTR queries are blocked.
+- IP-binding enforcement: the destination IP of each proxied connection is
+  verified against the IPs the DNS interceptor resolved for the claimed
+  Host/SNI. A workload presenting an allowed hostname while connecting to
+  an arbitrary IP is denied (`DENY` with `reason: ip-not-bound-to-host`
+  in the audit log).
 - WebSocket connections are only policy-checked at the initial HTTP upgrade request. Frames sent after the upgrade are not inspected — a workload can use an allowed WebSocket endpoint as an arbitrary data channel.
 - Cert-pinned clients fail against the mitmproxy CA. Most things (`gh`, `curl`, Node, Python, JVM) honour the system trust store and work, but statically compiled Go binaries with custom `tls.Config{RootCAs:...}` will fail closed.
 - The workload loses its own network namespace; anything it wants to do at the network layer (bind privileged ports, set its own iptables) now conflicts with the proxy.

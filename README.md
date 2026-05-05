@@ -155,8 +155,10 @@ The audit log is tailed and printed to stderr (and visible in the pi UI as info 
 ### Limitations
 
 - Only HTTP/HTTPS traffic is policy-filtered. All other outbound traffic (non-standard TCP ports, SSH, raw UDP, IPv6) is blocked at the firewall — not passed through unfiltered.
-- DNS (UDP 53) is allowed so hostname resolution works inside the workload, and remains a residual side-channel. Full mitigation (DNS interception + blocking) planned for v2.
-- Host matching uses the TLS SNI / `Host` header, both workload-controlled. A workload can direct traffic to an arbitrary IP while presenting an allowed hostname. Full mitigation requires DNS interception (planned for v2).
+- DNS is intercepted: only policy-listed hostnames can be resolved. All other
+  queries return NXDOMAIN. Resolved IP↔hostname bindings are used to verify
+  each connection's destination IP, blocking direct-to-IP connections with
+  spoofed Host/SNI.
 - WebSocket connections are only policy-checked at the initial HTTP upgrade request. Frames sent after the upgrade are not inspected — a workload can use an allowed WebSocket endpoint as an arbitrary data channel.
 - Cert-pinned clients fail against the mitmproxy CA.
 
