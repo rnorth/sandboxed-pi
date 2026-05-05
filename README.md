@@ -168,9 +168,13 @@ The audit log is tailed and printed to stderr (and visible in the pi UI as info 
 
 ## How it works
 
-For the runtime mechanics — lifecycle hooks, the path a tool call takes, error handling — see [docs/architecture.md](./docs/architecture.md).
+For runtime mechanics and design rationale, see the feature docs:
 
-For the *why* behind the design — containment model, path mounting, non-root execution, fail-closed default — see the [Architecture Decision Records](./docs/decisions/README.md).
+- [Container sandbox](./docs/container-sandbox.md) — containment model, session lifecycle, tool-call flow, container resilience, fail-closed
+- [Container configuration](./docs/container-configuration.md) — path mounting, non-root execution
+- [Egress control](./docs/egress-control.md) — mitmproxy sidecar, policy format, limitations
+
+For a high-level orientation, see [docs/architecture.md](./docs/architecture.md).
 
 ## Development
 
