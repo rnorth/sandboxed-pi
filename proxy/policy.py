@@ -42,6 +42,7 @@ Known limitations:
 
 import os
 import re
+import sys
 import json
 import threading
 from datetime import datetime
@@ -127,8 +128,6 @@ class PolicyAddon:
             self._allowed_hosts = frozenset(
                 entry["host"] for entry in content.get("networkPolicies", [])
             )
-            self._binding_cache = BindingCache()
-            self._audit_lock = threading.Lock()
 
             ctx.log.info(f"Loaded policy with {len(self.network_policies)} hosts")
 
@@ -191,6 +190,8 @@ class PolicyAddon:
             audit_lock=self._audit_lock,
         )
         self._dns_interceptor.start()
+        if not self._allowed_hosts:
+            ctx.log.warn("[sandboxed-pi] DNS interceptor started with empty allowlist — all DNS queries will return NXDOMAIN")
         threading.Thread(
             target=self._dns_watchdog,
             daemon=True,
@@ -198,9 +199,10 @@ class PolicyAddon:
         ).start()
 
     def _dns_watchdog(self) -> None:
-        self._dns_interceptor._thread.join()
+        if self._dns_interceptor is None:
+            return
+        self._dns_interceptor.join()
         # DNS interceptor thread died unexpectedly — fail closed
-        import sys
         print("[sandboxed-pi] DNS interceptor thread died, shutting down", file=sys.stderr)
         os._exit(1)
 

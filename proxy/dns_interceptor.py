@@ -53,6 +53,10 @@ class DnsInterceptor:
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def join(self) -> None:
+        if self._thread is not None:
+            self._thread.join()
+
     def _serve(self) -> None:
         while True:
             try:
