@@ -205,11 +205,17 @@ class TestDnsInterceptorCaching:
         assert cache.is_bound("api.github.com", "140.82.121.7")
         assert cache.is_bound("api.github.com", "140.82.121.8")
 
-    def test_non_a_answer_not_cached(self):
-        # TXT response — no A records, nothing should be cached
-        upstream_reply = _make_nodata_response("api.github.com")
-        interceptor, cache = self._make_interceptor(upstream_reply)
-        request = dnslib.DNSRecord.question("api.github.com", "TXT")
+    def test_non_a_rtype_in_answer_not_cached(self):
+        # A query returns a mixed response (A + NS records); only A rdata should be cached
+        reply = dnslib.DNSRecord(dnslib.DNSHeader(qr=1, aa=1, ra=1))
+        reply.add_question(dnslib.DNSQuestion("api.github.com"))
+        reply.add_answer(dnslib.RR("api.github.com", dnslib.QTYPE.A,
+                                   rdata=dnslib.A("140.82.121.6"), ttl=300))
+        reply.add_answer(dnslib.RR("api.github.com", dnslib.QTYPE.NS,
+                                   rdata=dnslib.NS("ns1.github.com"), ttl=300))
+        interceptor, cache = self._make_interceptor(reply)
+        request = dnslib.DNSRecord.question("api.github.com", "A")
         interceptor._handle(request)
-        # Nothing should be cached since no A records in response
-        assert not cache.is_bound("api.github.com", "140.82.121.6")
+        assert cache.is_bound("api.github.com", "140.82.121.6")
+        # NS rdata string should not appear as a cached IP
+        assert not cache.is_bound("api.github.com", "ns1.github.com")
