@@ -40,13 +40,17 @@ Known limitations:
       exposes them via websocket_message(), which this addon does not implement.
 """
 
+import os
 import re
 import json
+import threading
 from datetime import datetime
 from typing import Optional
 
 import yaml
 from mitmproxy import http, ctx
+
+from dns_interceptor import BindingCache, DnsInterceptor
 
 
 class PolicyAddon:
@@ -55,7 +59,11 @@ class PolicyAddon:
     def __init__(self):
         self.policy_file = ""
         self.network_policies: list[dict] = []
-        self.audit_log_path = "/var/log/sandboxed-pi/audit.log"
+        self._audit_log_path = "/var/log/sandboxed-pi/audit.log"
+        self._allowed_hosts: frozenset = frozenset()
+        self._binding_cache: BindingCache = BindingCache()
+        self._audit_lock: threading.Lock = threading.Lock()
+        self._dns_interceptor: Optional[DnsInterceptor] = None
 
     def load(self, loader) -> None:
         loader.add_option(
@@ -116,6 +124,12 @@ class PolicyAddon:
                         "rules": compiled_rules,
                     })
 
+            self._allowed_hosts = frozenset(
+                entry["host"] for entry in content.get("networkPolicies", [])
+            )
+            self._binding_cache = BindingCache()
+            self._audit_lock = threading.Lock()
+
             ctx.log.info(f"Loaded policy with {len(self.network_policies)} hosts")
 
         except Exception as e:
@@ -132,8 +146,9 @@ class PolicyAddon:
             "method": method,
         }
         try:
-            with open(self.audit_log_path, "a") as f:
-                f.write(json.dumps(entry) + "\n")
+            with self._audit_lock:
+                with open(self._audit_log_path, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
             # Also log to mitmproxy's log for visibility
             ctx.log.warn(f"AUDIT: {decision} {method} {host}{path}")
         except Exception as e:
@@ -166,6 +181,28 @@ class PolicyAddon:
             self._audit("DENY", host, path, method)
         else:
             self._audit("ALLOW", host, path, method)
+
+    def running(self) -> None:
+        """Called by mitmproxy when the proxy is fully up and ready."""
+        self._dns_interceptor = DnsInterceptor(
+            allowed_hosts=self._allowed_hosts,
+            cache=self._binding_cache,
+            audit_log_path=self._audit_log_path,
+            audit_lock=self._audit_lock,
+        )
+        self._dns_interceptor.start()
+        threading.Thread(
+            target=self._dns_watchdog,
+            daemon=True,
+            name="dns-watchdog",
+        ).start()
+
+    def _dns_watchdog(self) -> None:
+        self._dns_interceptor._thread.join()
+        # DNS interceptor thread died unexpectedly — fail closed
+        import sys
+        print("[sandboxed-pi] DNS interceptor thread died, shutting down", file=sys.stderr)
+        os._exit(1)
 
     def _check_policy(self, host: str, path: str, method: str) -> Optional[str]:
         """Check if host+path+method matches any policy rule.
