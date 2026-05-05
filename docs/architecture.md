@@ -170,7 +170,7 @@ What the architecture **does** guarantee:
 
 What it **does not** guarantee yet:
 
-- **Network isolation.** The container has full outbound network access. A planned MITM proxy sidecar will let users gate this.
+- ~~Network isolation.~~ The container now has optional egress control via `--egress-policy` and a mitmproxy sidecar. Without the flag, full outbound access remains.
 - **Resource limits.** No CPU, memory, or PID-count caps. A runaway loop in the container can consume host resources.
 - **Read-only rootfs.** The container's root filesystem is writable; only ephemerality bounds it.
 

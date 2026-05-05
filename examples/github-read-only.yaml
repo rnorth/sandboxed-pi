@@ -1,0 +1,60 @@
+# Example egress policy for sandboxed-pi
+#
+# Policy format: networkPolicies array with host + ordered rules.
+# Last matching rule wins (like iptables).
+# Default-deny: any host+path not matching a rule is BLOCKED.
+#
+# To use: pi --egress-policy /path/to/this/file.yaml
+#
+# This example allows:
+#   - api.github.com: read-only GET/HEAD requests to specific API paths
+#   - registry.npmjs.org: all package downloads
+#   - raw.githubusercontent.com: all raw content
+#
+# Blocked (implicitly):
+#   - POST/PUT/DELETE/PATCH to any API endpoints
+#   - All traffic to other hosts
+
+networkPolicies:
+  - host: api.github.com
+    policies:
+      # Default-deny all paths
+      - action: DENY
+        path: /.*
+        method: "*"
+      # Allow read-only GitHub API access
+      - action: ALLOW
+        path: /repos/.*
+        method: GET
+      - action: ALLOW
+        path: /repos/.*
+        method: HEAD
+      - action: ALLOW
+        path: /users/.*
+        method: GET
+      - action: ALLOW
+        path: /orgs/.*
+        method: GET
+      - action: ALLOW
+        path: /gists/.*
+        method: GET
+      - action: ALLOW
+        path: /search/.*
+        method: GET
+      - action: ALLOW
+        path: /zen
+        method: GET
+
+  - host: raw.githubusercontent.com
+    policies:
+      # Allow all raw content
+      - action: ALLOW
+        path: .*
+        method: "*"
+
+  - host: registry.npmjs.org
+    policies:
+      # Allow all npm package downloads
+      - action: ALLOW
+        path: /.*
+        method: GET

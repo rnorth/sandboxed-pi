@@ -24,7 +24,7 @@ export interface HostUser {
 /**
  * Get the current user's info from the host system.
  */
-export function getHostUser(): HostUser {
+function getHostUser(): HostUser {
   const name = process.env.USER ?? process.env.USERNAME ?? "root";
   const uid = process.getuid?.() ?? 0;
   const gid = process.getgid?.() ?? 0;
@@ -40,7 +40,7 @@ export function getHostUser(): HostUser {
  * Build a custom container image with the host user baked in.
  * Returns the image name to use for containers.
  */
-export async function buildSandboxImage(
+async function buildSandboxImage(
   hostUser: HostUser,
   baseImage: string,
   imageName: string,
@@ -244,7 +244,7 @@ export function execInContainer(
  * Execute a docker command and return stdout as a trimmed string.
  * Throws on non-zero exit.
  */
-async function dockerExecRaw(args: string[], stdin?: string): Promise<Buffer> {
+export async function dockerExecRaw(args: string[], stdin?: string | Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, {
       stdio: ["pipe", "pipe", "pipe"],

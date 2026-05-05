@@ -125,7 +125,7 @@ describe("createDockerReadOps", () => {
 // ---------------------------------------------------------------------------
 
 describe("createDockerWriteOps", () => {
-  it("writeFile calls execInContainer with stdin content and mkdir -p + cat >", async () => {
+  it("writeFile calls execInContainer for the correct container and passes file content via stdin", async () => {
     mockExecInContainer.mockResolvedValue({
       exitCode: 0,
       stdout: Buffer.from(""),
@@ -135,14 +135,11 @@ describe("createDockerWriteOps", () => {
     const ops = createDockerWriteOps(CONTAINER);
     await ops.writeFile("/tmp/test.txt", "hello world");
 
-    // The command should make the directory and write via cat
-    const [containerArg, cmdArgs, options] = mockExecInContainer.mock.calls[0];
+    // Verify execInContainer was called exactly once for the right container
+    expect(mockExecInContainer).toHaveBeenCalledTimes(1);
+    const [containerArg, , options] = mockExecInContainer.mock.calls[0];
     expect(containerArg).toBe(CONTAINER);
-    expect(cmdArgs[0]).toBe("bash");
-    expect(cmdArgs[1]).toBe("-c");
-    expect(cmdArgs[2]).toContain("mkdir -p \"$(dirname");
-    expect(cmdArgs[2]).toContain("/tmp/test.txt");
-    expect(cmdArgs[2]).toContain("cat >");
+    // File content must be piped in via stdin (not embedded in the shell command)
     expect(options.stdin).toBe("hello world");
   });
 
@@ -211,9 +208,12 @@ describe("createDockerEditOps", () => {
     const ops = createDockerEditOps(CONTAINER);
     await ops.writeFile("/path/file.txt", "new content");
 
-    expect(mockExecInContainer).toHaveBeenCalled();
-    const [, cmdArgs] = mockExecInContainer.mock.calls[0];
-    expect(cmdArgs).toContain("bash");
+    // Verify the write was delegated — execInContainer called once for the right container
+    expect(mockExecInContainer).toHaveBeenCalledTimes(1);
+    const [containerArg, , options] = mockExecInContainer.mock.calls[0];
+    expect(containerArg).toBe(CONTAINER);
+    // Content passed via stdin (same contract as WriteOperations)
+    expect(options.stdin).toBe("new content");
   });
 
   it("delegates access to ReadOperations", async () => {

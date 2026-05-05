@@ -85,10 +85,84 @@ The image is rebuilt on first container creation, so changes take effect on the 
 |------|------|---------|-------------|
 | `--sandbox-image` | string | `ghcr.io/catthehacker/ubuntu:act-latest` | Base image used to build the per-user sandbox image |
 | `--no-sandbox` | boolean | `false` | Disable containerization; tools run on the host |
+| `--egress-policy <file>` | string | `""` | Path to a policy file for egress control (mitmproxy sidecar). See [egress control](#egress-control) for details. |
+
+## Egress control
+
+When `--egress-policy` is set, a mitmproxy sidecar container filters all outbound HTTP/HTTPS traffic from the sandbox. Each request is evaluated against a per-host list of ALLOW/DENY rules (last match wins); unmatched requests and unlisted hosts return `403 Access denied by egress policy`.
+
+This is non-voluntary — it uses iptables REDIRECT inside a shared network namespace, so it intercepts traffic from tools that ignore `HTTP_PROXY` (Go binaries, statically compiled tools, anything that opens raw sockets).
+
+### Policy file format
+
+```yaml
+networkPolicies:
+  - host: api.github.com
+    policies:
+      - action: DENY
+        path: /.*
+        method: "*"
+      - action: ALLOW
+        path: /repos/.*
+        method: GET
+      - action: ALLOW
+        path: /users/.*
+        method: GET
+
+  - host: registry.npmjs.org
+    policies:
+      - action: ALLOW
+        path: /.*
+        method: "*"
+```
+
+**Schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `networkPolicies` | `NetworkPolicy[]` | Top-level array |
+| `host` | `string` | Exact hostname to match |
+| `policies` | `Rule[]` | Ordered list of allow/deny rules |
+| `action` | `"ALLOW" \| "DENY"` | Rule action |
+| `path` | `string` | Python regex (`re` module, `fullmatch`) — matched against the path only, query string excluded |
+| `method` | `string` | HTTP method (`GET`, `POST`, `*` for all) |
+
+**Matching semantics:**
+- Rules are evaluated **top-to-bottom** (in declaration order)
+- The **last matching rule** wins (like iptables)
+- If no rule matches, the request is **DENIED** (default-deny)
+
+See [`examples/github-read-only.yaml`](./examples/github-read-only.yaml) for a working example.
+
+### How it works
+
+```
+pi --egress-policy policy.yaml
+  ├── proxy container starts (NET_ADMIN, mitmproxy + iptables in entrypoint)
+  ├── workload container starts with --network container:<proxy>  (shared netns)
+  └── iptables REDIRECT inside that netns sends TCP 80/443 to mitmproxy:8080
+        (--uid-owner exempts the proxy's own upstream traffic)
+
+tool call → docker exec workload <cmd>
+  → kernel redirects sockets to mitmproxy (transparent, ignores HTTP_PROXY)
+    → policy evaluation (ALLOW/DENY rules; default-deny → 403)
+    → TLS-terminate, re-encrypt to upstream
+    → audit log written to /var/log/sandboxed-pi/audit.log
+```
+
+The audit log is tailed and printed to stderr (and visible in the pi UI as info notifications) as requests are processed.
+
+### Limitations
+
+- Only HTTP/HTTPS traffic is policy-filtered. All other outbound traffic (non-standard TCP ports, SSH, raw UDP, IPv6) is blocked at the firewall — not passed through unfiltered.
+- DNS (UDP 53) is allowed so hostname resolution works inside the workload, and remains a residual side-channel. Full mitigation (DNS interception + blocking) planned for v2.
+- Host matching uses the TLS SNI / `Host` header, both workload-controlled. A workload can direct traffic to an arbitrary IP while presenting an allowed hostname. Full mitigation requires DNS interception (planned for v2).
+- WebSocket connections are only policy-checked at the initial HTTP upgrade request. Frames sent after the upgrade are not inspected — a workload can use an allowed WebSocket endpoint as an arbitrary data channel.
+- Cert-pinned clients fail against the mitmproxy CA.
 
 ## Roadmap
 
-- [ ] **MITM proxy sidecar** — control outbound network traffic from the container
+- [x] **MITM proxy sidecar** — control outbound network traffic from the container
 - [ ] **Resource limits** — CPU/memory constraints on the container
 - [ ] **Read-only rootfs** — only the mounted volume is writable
 
@@ -127,13 +201,18 @@ sandboxed-pi/
 ├── src/
 │   ├── index.ts       # Extension entry point (lifecycle, tool overrides, flags)
 │   ├── docker.ts      # Low-level Docker helpers (container lifecycle, exec, image build)
-│   └── ops.ts         # Operations factories for all 7 built-in tools
+│   ├── ops.ts         # Operations factories for all 7 built-in tools
+│   └── egress.ts      # Egress proxy lifecycle, policy parsing, audit log tailing
 ├── tests/
 │   ├── ops.test.ts                  # Unit tests for operation factories
+│   ├── egress.test.ts               # Unit tests for policy parsing and validation
 │   └── docker.integration.test.ts   # Integration tests for Docker helpers
 ├── docs/
 │   ├── architecture.md              # How the system works at runtime
 │   └── decisions/                   # ADRs — why the architecture is the way it is
 ├── Dockerfile.template              # Template for the per-user sandbox image
+├── Dockerfile.proxy                 # Image for the mitmproxy egress sidecar
+├── entrypoint.sh                    # Proxy entrypoint: iptables setup + mitmdump
+├── policy.py                        # mitmproxy addon: policy evaluation + audit log
 └── package.json
 ```
