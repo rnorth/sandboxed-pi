@@ -84,6 +84,11 @@ class DnsInterceptor:
 
         try:
             response = self._upstream(request)
+            # Cache A record IPs before returning response to workload (race-free)
+            if qtype == dnslib.QTYPE.A:
+                for rr in response.rr:
+                    if rr.rtype == dnslib.QTYPE.A:
+                        self._cache.record(qname, str(rr.rdata))
             self._audit("DNS-ALLOW", qname, dnslib.QTYPE.get(qtype, str(qtype)))
             return response
         except Exception:

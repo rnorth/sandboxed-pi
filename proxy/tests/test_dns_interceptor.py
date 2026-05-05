@@ -166,3 +166,50 @@ def _make_nodata_response(name: str) -> dnslib.DNSRecord:
     reply = dnslib.DNSRecord(dnslib.DNSHeader(qr=1, aa=1, ra=1))
     reply.add_question(dnslib.DNSQuestion(name))
     return reply
+
+
+class TestDnsInterceptorCaching:
+    """Tests that A record IPs are written to BindingCache before the response is returned."""
+
+    ALLOWED_HOSTS = frozenset({"api.github.com"})
+
+    def _make_interceptor(self, upstream_response):
+        cache = BindingCache()
+        fake_upstream = FakeUpstream(upstream_response)
+        interceptor = DnsInterceptor(
+            allowed_hosts=self.ALLOWED_HOSTS,
+            cache=cache,
+            audit_log_path="/dev/null",
+            audit_lock=__import__("threading").Lock(),
+            upstream=fake_upstream,
+        )
+        return interceptor, cache
+
+    def test_a_record_ip_cached_before_response(self):
+        upstream_reply = _make_a_response("api.github.com", "140.82.121.6")
+        interceptor, cache = self._make_interceptor(upstream_reply)
+        request = dnslib.DNSRecord.question("api.github.com", "A")
+        interceptor._handle(request)
+        assert cache.is_bound("api.github.com", "140.82.121.6")
+
+    def test_multiple_a_records_all_cached(self):
+        reply = dnslib.DNSRecord(dnslib.DNSHeader(qr=1, aa=1, ra=1))
+        reply.add_question(dnslib.DNSQuestion("api.github.com"))
+        for ip in ("140.82.121.6", "140.82.121.7", "140.82.121.8"):
+            reply.add_answer(dnslib.RR("api.github.com", dnslib.QTYPE.A,
+                                       rdata=dnslib.A(ip), ttl=300))
+        interceptor, cache = self._make_interceptor(reply)
+        request = dnslib.DNSRecord.question("api.github.com", "A")
+        interceptor._handle(request)
+        assert cache.is_bound("api.github.com", "140.82.121.6")
+        assert cache.is_bound("api.github.com", "140.82.121.7")
+        assert cache.is_bound("api.github.com", "140.82.121.8")
+
+    def test_non_a_answer_not_cached(self):
+        # TXT response — no A records, nothing should be cached
+        upstream_reply = _make_nodata_response("api.github.com")
+        interceptor, cache = self._make_interceptor(upstream_reply)
+        request = dnslib.DNSRecord.question("api.github.com", "TXT")
+        interceptor._handle(request)
+        # Nothing should be cached since no A records in response
+        assert not cache.is_bound("api.github.com", "140.82.121.6")
