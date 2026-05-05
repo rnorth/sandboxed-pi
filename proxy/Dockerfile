@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     ca-certificates \
     python3-pip \
-    && pip install --no-cache-dir pyyaml dnslib pytest \
+    && pip install --no-cache-dir pyyaml dnslib \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for policy and audit log
