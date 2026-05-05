@@ -212,8 +212,10 @@ sandboxed-pi/
 │   ├── egress.test.ts               # Unit tests for policy parsing and validation
 │   └── docker.integration.test.ts   # Integration tests for Docker helpers
 ├── docs/
-│   ├── architecture.md              # How the system works at runtime
-│   └── decisions/                   # ADRs — why the architecture is the way it is
+│   ├── architecture.md              # High-level orientation and links to feature docs
+│   ├── container-sandbox.md         # Containment model, lifecycle, tool-call flow
+│   ├── container-configuration.md   # Path mounting, non-root execution
+│   └── egress-control.md            # mitmproxy sidecar, policy format, limitations
 ├── Dockerfile.template              # Template for the per-user sandbox image
 ├── Dockerfile.proxy                 # Image for the mitmproxy egress sidecar
 ├── entrypoint.sh                    # Proxy entrypoint: iptables setup + mitmdump
