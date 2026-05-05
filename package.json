@@ -13,6 +13,7 @@
   "license": "MIT",
   "scripts": {
     "test": "vitest run",
+    "test:proxy": "sh scripts/test-proxy.sh",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
