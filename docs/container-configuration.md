@@ -22,8 +22,9 @@ Practical implications:
 - Tool output is consistent — paths the agent sees match what it would see running locally.
 - macOS-style paths (`/Users/...`) work inside a Linux container without ceremony; Docker's filesystem layer handles cross-platform semantics.
 - Paths *outside* the mount don't exist in the container. A tool call targeting `/etc/...` or `~/.ssh/...` fails at the container boundary, not in some translation step. This is the containment guarantee made concrete.
+- Symlinks, relative paths produced by tools, and anything else pi resolves continue to work — the container sees the same path space.
 
-Note: the container's filesystem layout reflects the host working-directory path (e.g. `/Users/alice/project` exists inside a Linux container). Tools that hard-code `/workspace` or expect a conventional layout won't find it.
+Note: the container's filesystem layout reflects the host working-directory path (e.g. `/Users/alice/project` exists inside a Linux container). Tools that hard-code `/workspace` or expect a conventional layout won't find it. The mount path also leaks the host username into the container — for this threat model (the user owns both sides) that's not a concern, but worth noting if the image is ever shared.
 
 Considered alternatives:
 
@@ -62,6 +63,7 @@ Results:
 - `whoami`, `id`, `$USER`, `$HOME` all reflect the host user. Tools that branch on identity behave correctly.
 - Files created in the mounted working directory are owned by the host user with no post-session cleanup.
 - The image is cached — no `useradd` cost on every container start.
+- The base image is not modified — the customization is a thin layer on top, so `--sandbox-image` can be swapped freely.
 
 Note: `/home/pi` is a fixed path inside the container and doesn't reflect the host's `$HOME`. Tools that read `~/.somerc` find nothing inside the container — this is intentional, not a bug.
 

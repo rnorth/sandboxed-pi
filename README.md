@@ -216,9 +216,11 @@ sandboxed-pi/
 │   ├── container-sandbox.md         # Containment model, lifecycle, tool-call flow
 │   ├── container-configuration.md   # Path mounting, non-root execution
 │   └── egress-control.md            # mitmproxy sidecar, policy format, limitations
+├── proxy/
+│   ├── Dockerfile                   # Image for the mitmproxy egress sidecar
+│   ├── entrypoint.py                # Proxy entrypoint: iptables setup + mitmproxy launch
+│   ├── policy.py                    # mitmproxy addon: policy evaluation + audit log
+│   └── setup_iptables.py            # iptables/ip6tables REDIRECT rule setup
 ├── Dockerfile.template              # Template for the per-user sandbox image
-├── Dockerfile.proxy                 # Image for the mitmproxy egress sidecar
-├── entrypoint.sh                    # Proxy entrypoint: iptables setup + mitmdump
-├── policy.py                        # mitmproxy addon: policy evaluation + audit log
 └── package.json
 ```

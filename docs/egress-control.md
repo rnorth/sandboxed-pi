@@ -107,3 +107,4 @@ See [`examples/github-read-only.yaml`](../examples/github-read-only.yaml) for a 
 - WebSocket connections are only policy-checked at the initial HTTP upgrade request. Frames sent after the upgrade are not inspected — a workload can use an allowed WebSocket endpoint as an arbitrary data channel.
 - Cert-pinned clients fail against the mitmproxy CA. Most things (`gh`, `curl`, Node, Python, JVM) honour the system trust store and work, but statically compiled Go binaries with custom `tls.Config{RootCAs:...}` will fail closed.
 - The workload loses its own network namespace; anything it wants to do at the network layer (bind privileged ports, set its own iptables) now conflicts with the proxy.
+- IPv6 traffic must be covered by `ip6tables` rules mirroring the `iptables` REDIRECT, or IPv6 must be disabled in the netns. If neither is done, AAAA-resolved traffic bypasses the proxy entirely.
