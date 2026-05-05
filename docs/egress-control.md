@@ -116,7 +116,7 @@ a DNS interceptor running inside the proxy process. The interceptor:
 
 The cached IP↔hostname bindings are then used by the mitmproxy request hook
 to verify that each connection's destination IP was legitimately resolved for
-the Host/SNI the workload is presenting (see IP-binding enforcement above).
+the Host/SNI the workload is presenting (see IP-binding enforcement in Limitations below).
 
 **Audit log tags:** `DNS-ALLOW` and `DNS-DENY` appear alongside the existing
 `ALLOW`/`DENY` entries. `DENY` entries from the binding check include a
