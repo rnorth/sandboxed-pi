@@ -162,12 +162,6 @@ The audit log is tailed and printed to stderr (and visible in the pi UI as info 
 - WebSocket connections are only policy-checked at the initial HTTP upgrade request. Frames sent after the upgrade are not inspected — a workload can use an allowed WebSocket endpoint as an arbitrary data channel.
 - Cert-pinned clients fail against the mitmproxy CA.
 
-## Roadmap
-
-- [x] **MITM proxy sidecar** — control outbound network traffic from the container
-- [ ] **Resource limits** — CPU/memory constraints on the container
-- [ ] **Read-only rootfs** — only the mounted volume is writable
-
 ## How it works
 
 For runtime mechanics and design rationale, see the feature docs:
