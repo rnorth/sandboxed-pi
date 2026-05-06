@@ -14,10 +14,11 @@ FROM ghcr.io/mitmproxy/mitmproxy:10
 # Also install PyYAML for the policy addon
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
+    iproute2 \
     procps \
     ca-certificates \
     python3-pip \
-    && pip install --no-cache-dir pyyaml \
+    && pip install --no-cache-dir pyyaml dnslib \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for policy and audit log
@@ -28,6 +29,7 @@ RUN chmod 755 /etc/sandboxed-pi /var/log/sandboxed-pi /var/run/sandboxed-pi
 COPY policy.py /usr/local/bin/policy.py
 RUN chmod +x /usr/local/bin/policy.py
 
+COPY dns_interceptor.py /usr/local/bin/dns_interceptor.py
 COPY setup_iptables.py /usr/local/bin/setup_iptables.py
 COPY entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod +x /usr/local/bin/setup_iptables.py /usr/local/bin/entrypoint.py

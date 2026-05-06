@@ -3,3 +3,5 @@ dist/
 .vite/
 *.tsbuildinfo
 docs/superpowers/
+**/__pycache__/
+*.pyc

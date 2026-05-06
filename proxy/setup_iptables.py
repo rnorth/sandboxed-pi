@@ -11,15 +11,16 @@ Design notes:
     the proxy's own traffic) is only valid for locally-generated packets
     and cannot be evaluated in PREROUTING under iptables-nft.
   - Non-root traffic to ports 80/443 is REDIRECT'd to the proxy.
+  - Non-root UDP 53 is REDIRECT'd to the DNS interceptor (port 5353).
   - Everything else from non-root is DROP'd so non-HTTP protocols
     (SSH, arbitrary TCP, raw UDP) cannot bypass egress controls.
-  - UDP 53 (DNS) is exempted so hostname resolution works; it remains
-    a residual side-channel, mitigated in v2.
   - All IPv6 is blocked (no IPv6 proxy support).
 """
 
 import subprocess
 import sys
+
+_DNS_INTERCEPTOR_PORT = 5353
 
 
 def _run(cmd: list[str]) -> None:
@@ -70,13 +71,26 @@ def setup(proxy_port: int) -> None:
              "-m", "owner", "!", "--uid-owner", "root",
              "-j", "REDIRECT", "--to-port", str(proxy_port))
 
+    # Intercept non-root UDP 53 → DNS interceptor
+    _ipt("-t", "nat", "-A", "SANDBOXED_PI",
+         "-p", "udp", "--dport", "53",
+         "-m", "owner", "!", "--uid-owner", "root",
+         "-j", "REDIRECT", "--to-port", str(_DNS_INTERCEPTOR_PORT))
+
     # Filter: block non-root traffic not going through the proxy
     _ipt("-t", "filter", "-N", "SANDBOXED_PI", check=False)
     _ipt("-t", "filter", "-F", "SANDBOXED_PI")
     _ipt("-t", "filter", "-A", "OUTPUT", "-j", "SANDBOXED_PI")
     _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-m", "owner", "--uid-owner", "root", "-j", "RETURN")
     _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-o", "lo", "-j", "RETURN")
-    _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-p", "udp", "--dport", "53", "-j", "RETURN")
+    # After a NAT REDIRECT the filter chain evaluates the packet with the rewritten
+    # destination port but before the kernel commits the reroute to loopback.
+    # The "-o lo" rule above does NOT match at this point, so we must explicitly
+    # allow packets headed for each redirected local port.
+    _ipt("-t", "filter", "-A", "SANDBOXED_PI",
+         "-p", "tcp", "--dport", str(proxy_port), "-d", "127.0.0.1", "-j", "RETURN")
+    _ipt("-t", "filter", "-A", "SANDBOXED_PI",
+         "-p", "udp", "--dport", str(_DNS_INTERCEPTOR_PORT), "-d", "127.0.0.1", "-j", "RETURN")
     _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-j", "DROP")
 
     # IPv6: block all non-root outbound
