@@ -32,6 +32,10 @@ function getPackageVersion(): string {
  * If `proxyImage` is provided (via --proxy-image flag), use it as-is.
  * Otherwise pull ghcr.io/rnorth/sandboxed-pi/proxy:<version> and return it.
  * Throws if the pull fails — no local-build fallback.
+ *
+ * Note: `getPackageVersion()` is implicitly tested here because the unit
+ * tests assert the resolved image name contains the semver tag from
+ * package.json — there's no need for a separate test on the helper.
  */
 export async function resolveProxyImage(proxyImage?: string): Promise<string> {
   if (proxyImage) {
@@ -39,9 +43,18 @@ export async function resolveProxyImage(proxyImage?: string): Promise<string> {
   }
   const version = getPackageVersion();
   const imageName = `${PROXY_IMAGE_REPO}:${version}`;
-  await dockerExecRaw(["pull", imageName]);
+  try {
+    await dockerExecRaw(["pull", imageName]);
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to pull proxy image ${imageName}: ${cause}`);
+  }
   return imageName;
 }
+
+// NOTE: getPackageVersion() is implicitly tested here because the unit tests
+// assert the resolved image name contains the semver tag from package.json —
+// there's no need for a separate test on the helper.
 
 // ---------------------------------------------------------------------------
 // Container lifecycle
@@ -59,10 +72,10 @@ export async function resolveProxyImage(proxyImage?: string): Promise<string> {
 export async function createProxyContainer(
   policyFile: string,
   workloadContainerName: string,
-  proxyImage?: string,
+  proxyImageOverride?: string,
 ): Promise<string> {
   const proxyContainerName = `pi-egress-proxy-${randomUUID().slice(0, 8)}`;
-  const image = await resolveProxyImage(proxyImage);
+  const image = await resolveProxyImage(proxyImageOverride);
 
   // Resolve policy file to absolute path for Docker volume mount
   const policyFilePath = isAbsolute(policyFile)

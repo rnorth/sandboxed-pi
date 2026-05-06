@@ -92,9 +92,9 @@ export default function (pi: ExtensionAPI) {
   async function startEgressProxy(
     policyFile: string,
     workloadContainer: string,
-    proxyImage?: string,
+    proxyImageOverride?: string,
   ): Promise<{ proxyContainer: string; auditTailer: AbortController }> {
-    const proxyContainer = await createProxyContainer(policyFile, workloadContainer, proxyImage);
+    const proxyContainer = await createProxyContainer(policyFile, workloadContainer, proxyImageOverride);
 
     const tailer = tailAuditLog(proxyContainer, (line) => {
       console.error(`[sandboxed-pi] [egress] ${line}`);

@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test *)",
+      "Bash(npx tsc *)",
+      "Bash(git add *)",
+      "Bash(gh pr edit 4 --body ' *)",
+      "Bash(gh pr *)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)",
+      "Bash(gh issue *)",
+      "Bash(docker run *)",
+      "Bash(docker rmi *)",
+      "Bash(pi --egress-policy examples/github-read-only.yaml -p \"say hello\")",
+      "Bash(docker build *)",
+      "Bash(git commit *)",
+      "Bash(npm run *)",
+      "Bash(git *)",
+      "Bash(gh api *)",
+      "Bash(python3 -c ' *)",
+      "Bash(mise exec *)",
+      "Bash(python3 -m pytest --version)",
+      "Bash(pip show *)",
+      "Bash(python3 -m pytest proxy/tests/test_dns_interceptor.py -v)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts', {}\\), indent=2\\)\\)\")",
+      "Bash(docker exec *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(npx vitest *)",
+      "Bash(gh repo *)"
+    ]
+  }
+}
