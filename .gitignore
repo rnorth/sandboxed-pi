@@ -5,3 +5,4 @@ dist/
 docs/superpowers/
 **/__pycache__/
 *.pyc
+.worktrees/
