@@ -29,9 +29,6 @@ Matching semantics:
     - method is either '*' (match all) or an exact uppercase HTTP method.
 
 Known limitations:
-    - Host matching uses SNI (HTTPS) or the Host header (HTTP), both of which
-      are workload-controlled. IP-binding enforcement (via DnsInterceptor) mitigates
-      direct-to-IP connections with spoofed Host/SNI headers.
     - Only TCP 80/443 is intercepted and policy-filtered. All other outbound
       traffic is blocked by iptables DROP rules in the sidecar entrypoint.
     - WebSocket connections: only the initial HTTP upgrade request is checked
