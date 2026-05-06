@@ -30,9 +30,8 @@ Matching semantics:
 
 Known limitations:
     - Host matching uses SNI (HTTPS) or the Host header (HTTP), both of which
-      are workload-controlled. A workload can direct a TCP connection to an
-      arbitrary IP while presenting an allowed SNI/Host, bypassing the hostname
-      check. Full mitigation requires DNS interception (deferred to v2).
+      are workload-controlled. IP-binding enforcement (via DnsInterceptor) mitigates
+      direct-to-IP connections with spoofed Host/SNI headers.
     - Only TCP 80/443 is intercepted and policy-filtered. All other outbound
       traffic is blocked by iptables DROP rules in the sidecar entrypoint.
     - WebSocket connections: only the initial HTTP upgrade request is checked
@@ -40,6 +39,7 @@ Known limitations:
       exposes them via websocket_message(), which this addon does not implement.
 """
 
+import ipaddress
 import os
 import re
 import sys
@@ -52,6 +52,27 @@ import yaml
 from mitmproxy import http, ctx
 
 from dns_interceptor import BindingCache, DnsInterceptor
+
+
+def _is_ip_address(s: str) -> bool:
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _check_binding(host: str, dest_ip: Optional[str], cache: BindingCache) -> bool:
+    """Return True if the connection should be allowed through the binding check.
+
+    Returns True (skip check) when dest_ip is None or a hostname — mitmproxy
+    resolved it, so it wasn't an arbitrary IP connection.
+    Returns True when dest_ip is an IP that was recorded for host in cache.
+    Returns False (deny) when dest_ip is an IP not recorded for host.
+    """
+    if dest_ip is None or not _is_ip_address(dest_ip):
+        return True
+    return cache.is_bound(host, dest_ip)
 
 
 class PolicyAddon:
@@ -135,7 +156,7 @@ class PolicyAddon:
             ctx.log.error(f"Failed to load policy file: {e}")
             raise
 
-    def _audit(self, decision: str, host: str, path: str, method: str) -> None:
+    def _audit(self, decision: str, host: str, path: str, method: str, reason: Optional[str] = None) -> None:
         """Write a structured audit log entry."""
         entry = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -144,6 +165,8 @@ class PolicyAddon:
             "path": path,
             "method": method,
         }
+        if reason is not None:
+            entry["reason"] = reason
         try:
             with self._audit_lock:
                 with open(self._audit_log_path, "a") as f:
@@ -159,6 +182,15 @@ class PolicyAddon:
         # Strip query string — policy rules match only the path component.
         path = flow.request.path.split("?")[0]
         method = flow.request.method
+
+        # IP-binding check: verify dest IP was resolved by our DNS interceptor
+        dest_ip = flow.server_conn.address[0] if flow.server_conn.address else None
+        if not _check_binding(host, dest_ip, self._binding_cache):
+            self._audit("DENY", host, path, method, reason="ip-not-bound-to-host")
+            flow.response = http.Response.make(
+                403, b"Access denied by egress policy", {"Content-Type": "text/plain"}
+            )
+            return
 
         # Check policies
         decision = self._check_policy(host, path, method)
