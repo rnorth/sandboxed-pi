@@ -272,8 +272,15 @@ describe.runIf(DOCKER_AVAILABLE)("egress proxy – DNS interception", { timeout:
       { stdio: "pipe" },
     );
 
+    // Build the proxy image locally so we don't depend on ghcr.io for tests
+    const testProxyImage = "pi-egress-proxy:test";
+    execSync(
+      `docker build -t ${testProxyImage} ./proxy`,
+      { stdio: "pipe" },
+    );
+
     // Start proxy sidecar (shares workload netns, installs CA cert in workload)
-    await createProxyContainer(policyPath, workloadName);
+    await createProxyContainer(policyPath, workloadName, testProxyImage);
   }, 300_000);
 
   afterAll(async () => {
