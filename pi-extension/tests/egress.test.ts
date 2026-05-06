@@ -26,6 +26,7 @@ vi.mock("../src/docker.js", () => ({
 
 const {
   validatePolicy,
+  resolveProxyImage,
 } = await import("../src/egress.js");
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,41 @@ function writePolicy(content: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests: resolveProxyImage
+// ---------------------------------------------------------------------------
+
+describe("resolveProxyImage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the override image directly without pulling", async () => {
+    const result = await resolveProxyImage("my-local-proxy:dev");
+
+    expect(result).toBe("my-local-proxy:dev");
+    expect(mockDockerExecRaw).not.toHaveBeenCalled();
+  });
+
+  it("pulls the versioned ghcr.io image when no override is given", async () => {
+    mockDockerExecRaw.mockResolvedValue(Buffer.from(""));
+
+    const result = await resolveProxyImage();
+
+    expect(mockDockerExecRaw).toHaveBeenCalledWith(
+      expect.arrayContaining(["pull", expect.stringMatching(/^ghcr\.io\/rnorth\/sandboxed-pi\/proxy:\d+\.\d+\.\d+$/)]),
+    );
+    expect(result).toMatch(/^ghcr\.io\/rnorth\/sandboxed-pi\/proxy:\d+\.\d+\.\d+$/);
+  });
+
+  it("throws when the pull fails", async () => {
+    mockDockerExecRaw.mockRejectedValue(new Error("pull access denied"));
+
+    await expect(resolveProxyImage()).rejects.toThrow("pull access denied");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: validatePolicy
 // ---------------------------------------------------------------------------
 
 describe("validatePolicy", () => {

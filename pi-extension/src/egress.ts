@@ -8,9 +8,9 @@
  * See ADR-0005 for full design.
  */
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolve, isAbsolute } from "node:path";
 import { dockerExecRaw, isContainerRunning } from "./docker.js";
 
@@ -18,33 +18,28 @@ import { dockerExecRaw, isContainerRunning } from "./docker.js";
 // Proxy container image
 // ---------------------------------------------------------------------------
 
-const PROXY_IMAGE_NAME_PREFIX = "pi-egress-proxy";
+const PROXY_IMAGE_REPO = "ghcr.io/rnorth/sandboxed-pi/proxy";
+
+function getPackageVersion(): string {
+  const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
+  return pkg.version;
+}
 
 /**
- * Build the egress proxy image if not already present.
- * Uses the Dockerfile.proxy in the extension directory.
+ * Resolve the proxy image to use.
+ *
+ * If `proxyImage` is provided (via --proxy-image flag), use it as-is.
+ * Otherwise pull ghcr.io/rnorth/sandboxed-pi/proxy:<version> and return it.
+ * Throws if the pull fails — no local-build fallback.
  */
-export async function ensureProxyImageExists(): Promise<string> {
-  const imageName = `${PROXY_IMAGE_NAME_PREFIX}:latest`;
-  const proxyDir = resolve(__dirname, "..", "..", "proxy");
-  const dockerfile = readFileSync(resolve(proxyDir, "Dockerfile"), "utf-8");
-
-  try {
-    // Check if image already exists
-    const result = await dockerExecRaw(["image", "inspect", "-f", "{{.Id}}", imageName]);
-    if (result.toString().trim()) {
-      return imageName; // image exists
-    }
-  } catch {
-    // Image doesn't exist, build it
+export async function resolveProxyImage(proxyImage?: string): Promise<string> {
+  if (proxyImage) {
+    return proxyImage;
   }
-
-  // Build the image
-  await dockerExecRaw(
-    ["build", "-t", imageName, "-f", "-", proxyDir],
-    dockerfile,
-  );
-
+  const version = getPackageVersion();
+  const imageName = `${PROXY_IMAGE_REPO}:${version}`;
+  await dockerExecRaw(["pull", imageName]);
   return imageName;
 }
 
@@ -64,9 +59,10 @@ export async function ensureProxyImageExists(): Promise<string> {
 export async function createProxyContainer(
   policyFile: string,
   workloadContainerName: string,
+  proxyImage?: string,
 ): Promise<string> {
   const proxyContainerName = `pi-egress-proxy-${randomUUID().slice(0, 8)}`;
-  const proxyImage = await ensureProxyImageExists();
+  const image = await resolveProxyImage(proxyImage);
 
   // Resolve policy file to absolute path for Docker volume mount
   const policyFilePath = isAbsolute(policyFile)
@@ -94,7 +90,7 @@ export async function createProxyContainer(
     "--cap-add=NET_ADMIN",
     "--network", `container:${workloadContainerName}`,
     "-v", `${policyFilePath}:${policyDest}:ro`,
-    proxyImage,
+    image,
     // Entrypoint args: policy file path
     policyDest,
   ]);
