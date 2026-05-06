@@ -198,25 +198,32 @@ Integration tests require a running Docker daemon. Unit tests mock Docker operat
 
 ```
 sandboxed-pi/
-├── src/
-│   ├── index.ts       # Extension entry point (lifecycle, tool overrides, flags)
-│   ├── docker.ts      # Low-level Docker helpers (container lifecycle, exec, image build)
-│   ├── ops.ts         # Operations factories for all 7 built-in tools
-│   └── egress.ts      # Egress proxy lifecycle, policy parsing, audit log tailing
-├── tests/
-│   ├── ops.test.ts                  # Unit tests for operation factories
-│   ├── egress.test.ts               # Unit tests for policy parsing and validation
-│   └── docker.integration.test.ts   # Integration tests for Docker helpers
+├── pi-extension/
+│   ├── src/
+│   │   ├── index.ts       # Extension entry point (lifecycle, tool overrides, flags)
+│   │   ├── docker.ts      # Low-level Docker helpers (container lifecycle, exec, image build)
+│   │   ├── ops.ts         # Operations factories for all 7 built-in tools
+│   │   └── egress.ts      # Egress proxy lifecycle, policy parsing, audit log tailing
+│   ├── tests/
+│   │   ├── ops.test.ts                  # Unit tests for operation factories
+│   │   ├── egress.test.ts               # Unit tests for policy parsing and validation
+│   │   └── docker.integration.test.ts   # Integration tests for Docker helpers
+│   ├── Dockerfile.template              # Template for the per-user sandbox image
+│   ├── tsconfig.json
+│   └── vitest.config.ts
+├── proxy/
+│   ├── Dockerfile                   # Image for the mitmproxy egress sidecar
+│   ├── entrypoint.py                # Proxy entrypoint: iptables setup + mitmproxy launch
+│   ├── policy.py                    # mitmproxy addon: policy evaluation + audit log
+│   ├── dns_interceptor.py           # DNS interception addon
+│   ├── setup_iptables.py            # iptables/ip6tables REDIRECT rule setup
+│   └── tests/
 ├── docs/
 │   ├── architecture.md              # High-level orientation and links to feature docs
 │   ├── container-sandbox.md         # Containment model, lifecycle, tool-call flow
 │   ├── container-configuration.md   # Path mounting, non-root execution
 │   └── egress-control.md            # mitmproxy sidecar, policy format, limitations
-├── proxy/
-│   ├── Dockerfile                   # Image for the mitmproxy egress sidecar
-│   ├── entrypoint.py                # Proxy entrypoint: iptables setup + mitmproxy launch
-│   ├── policy.py                    # mitmproxy addon: policy evaluation + audit log
-│   └── setup_iptables.py            # iptables/ip6tables REDIRECT rule setup
-├── Dockerfile.template              # Template for the per-user sandbox image
+├── scripts/
+├── examples/
 └── package.json
 ```

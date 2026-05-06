@@ -12,10 +12,10 @@
   ],
   "license": "MIT",
   "scripts": {
-    "test": "npm run test:proxy && vitest run",
+    "test": "npm run test:proxy && vitest run --config pi-extension/vitest.config.ts",
     "test:proxy": "sh scripts/test-proxy.sh",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "test:watch": "vitest --config pi-extension/vitest.config.ts",
+    "typecheck": "tsc --noEmit --project pi-extension/tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
@@ -28,7 +28,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./pi-extension/src/index.ts"
     ]
   }
 }

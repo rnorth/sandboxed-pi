@@ -26,7 +26,7 @@ const PROXY_IMAGE_NAME_PREFIX = "pi-egress-proxy";
  */
 export async function ensureProxyImageExists(): Promise<string> {
   const imageName = `${PROXY_IMAGE_NAME_PREFIX}:latest`;
-  const proxyDir = resolve(__dirname, "..", "proxy");
+  const proxyDir = resolve(__dirname, "..", "..", "proxy");
   const dockerfile = readFileSync(resolve(proxyDir, "Dockerfile"), "utf-8");
 
   try {

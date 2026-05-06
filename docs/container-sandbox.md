@@ -26,7 +26,7 @@ The set of overridden tools is exhaustive: `bash`, `read`, `write`, `edit`, `ls`
 
 ### 1. Extension load
 
-`activate(pi)` in `src/index.ts` registers everything synchronously and does no I/O:
+`activate(pi)` in `pi-extension/src/index.ts` registers everything synchronously and does no I/O:
 
 - Flags: `--sandbox-image`, `--no-sandbox`
 - Tool overrides: `bash`, `read`, `write`, `edit`, `ls`, `grep`, `find`
@@ -100,7 +100,7 @@ The pi tool factories (`createReadTool`, `createBashTool`, …) accept an `opera
 
 ## Per-tool operations
 
-Each operations factory in `src/ops.ts` returns an object whose methods are thin wrappers around `docker exec`.
+Each operations factory in `pi-extension/src/ops.ts` returns an object whose methods are thin wrappers around `docker exec`.
 
 | Tool | Container command(s) |
 |------|---------------------|
