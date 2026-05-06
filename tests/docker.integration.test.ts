@@ -7,9 +7,14 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from "vitest";
 import { execSync } from "node:child_process";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 
 const { execInContainer, isContainerRunning, destroySandboxContainer, createSandboxContainer } =
   await import("../src/docker.js");
+
+const { createProxyContainer, destroyProxyContainer } =
+  await import("../src/egress.js");
 
 // ---------------------------------------------------------------------------
 // Docker availability check
@@ -231,5 +236,111 @@ describe.runIf(DOCKER_AVAILABLE)("createSandboxContainer", () => {
       }
       await destroySandboxContainer(name);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// egress proxy – DNS interception
+// ---------------------------------------------------------------------------
+
+// Policy that allows one.one.one.one (Cloudflare's DoH endpoint)
+const DNS_TEST_POLICY = `
+networkPolicies:
+  - host: one.one.one.one
+    policies:
+      - action: ALLOW
+        path: /.*
+        method: GET
+`;
+
+describe.runIf(DOCKER_AVAILABLE)("egress proxy – DNS interception", { timeout: 300_000 }, () => {
+  // Proxy setup (CA cert generation) can take up to ~3 minutes on cold start
+  const workloadImage = "ghcr.io/catthehacker/ubuntu:act-latest";
+  const suffix = Date.now();
+  const workloadName = `test-dns-workload-${suffix}`;
+  const policyDir = `/tmp/sandboxed-pi-dns-test-${suffix}`;
+  const policyPath = resolve(policyDir, "policy.yaml");
+
+  beforeAll(async () => {
+    // Write policy file
+    mkdirSync(policyDir, { recursive: true });
+    writeFileSync(policyPath, DNS_TEST_POLICY, "utf-8");
+
+    // Start workload container (detached, no network yet — proxy will share its netns)
+    execSync(
+      `docker run -d --rm --name ${workloadName} ${workloadImage} sleep 3600`,
+      { stdio: "pipe" },
+    );
+
+    // Start proxy sidecar (shares workload netns, installs CA cert in workload)
+    await createProxyContainer(policyPath, workloadName);
+  }, 300_000);
+
+  afterAll(async () => {
+    // destroyProxyContainer is best-effort; the proxy may already be gone
+    try {
+      execSync(`docker ps -q --filter name=pi-egress-proxy`, { stdio: "pipe" })
+        .toString().trim()
+        .split("\n")
+        .filter(Boolean)
+        .forEach((id) => execSync(`docker rm -f ${id}`, { stdio: "pipe" }));
+    } catch {
+      // ignore
+    }
+    try {
+      execSync(`docker rm -f ${workloadName}`, { stdio: "pipe" });
+    } catch {
+      // already gone
+    }
+  });
+
+  // All workload commands run as non-root (uid 1000) so the iptables rules
+  // intercept their traffic.  The proxy exempts root-owned packets from
+  // redirection so that its own upstream connections are not looped.
+  const nonRoot = { asUser: "1000:1000" };
+
+  it("resolves policy-listed hostname", async () => {
+    // Use Python's socket module — dig/nslookup may not be installed in all images
+    const result = await execInContainer(workloadName, [
+      "python3", "-c",
+      "import socket; print(socket.gethostbyname('one.one.one.one'))",
+    ], nonRoot);
+    const output = result.stdout.toString().trim();
+    expect(output).toMatch(/\d+\.\d+\.\d+\.\d+/);
+  });
+
+  it("non-policy hostname returns resolution failure", async () => {
+    // The DNS interceptor returns NXDOMAIN; Python raises socket.gaierror
+    const result = await execInContainer(workloadName, [
+      "python3", "-c",
+      "import socket; socket.gethostbyname('random-not-in-policy.example.com')",
+    ], nonRoot);
+    // Expect non-zero exit (gaierror raised, no output printed)
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it("direct-to-IP with wrong hostname is denied (403 or connection failure)", async () => {
+    // Connect to 9.9.9.9 (Quad9) while claiming to be one.one.one.one via SNI.
+    // 9.9.9.9 was never recorded in BindingCache for one.one.one.one, so the
+    // binding check in the proxy should return 403.
+    const result = await execInContainer(workloadName, [
+      "curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+      "--connect-to", "one.one.one.one:443:9.9.9.9:443",
+      "https://one.one.one.one/",
+    ], nonRoot);
+    const statusCode = result.stdout.toString().trim();
+    const denied = result.exitCode !== 0 || statusCode === "403" || statusCode === "000";
+    expect(denied).toBe(true);
+  });
+
+  it("legitimate DNS + HTTP GET succeeds (200)", async () => {
+    // Accept header required by Cloudflare's DoH endpoint for JSON responses
+    const result = await execInContainer(workloadName, [
+      "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+      "-H", "Accept: application/dns-json",
+      "https://one.one.one.one/dns-query?name=example.com&type=A",
+    ], nonRoot);
+    const statusCode = result.stdout.toString().trim();
+    expect(statusCode).toBe("200");
   });
 });

@@ -83,8 +83,14 @@ def setup(proxy_port: int) -> None:
     _ipt("-t", "filter", "-A", "OUTPUT", "-j", "SANDBOXED_PI")
     _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-m", "owner", "--uid-owner", "root", "-j", "RETURN")
     _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-o", "lo", "-j", "RETURN")
-    # Non-root UDP 53 is REDIRECT'd to the DNS interceptor via the NAT rule above;
-    # the filter DROP below is correct — redirected packets hit lo and are caught by the -o lo RETURN.
+    # After a NAT REDIRECT the filter chain evaluates the packet with the rewritten
+    # destination port but before the kernel commits the reroute to loopback.
+    # The "-o lo" rule above does NOT match at this point, so we must explicitly
+    # allow packets headed for each redirected local port.
+    _ipt("-t", "filter", "-A", "SANDBOXED_PI",
+         "-p", "tcp", "--dport", str(proxy_port), "-d", "127.0.0.1", "-j", "RETURN")
+    _ipt("-t", "filter", "-A", "SANDBOXED_PI",
+         "-p", "udp", "--dport", str(_DNS_INTERCEPTOR_PORT), "-d", "127.0.0.1", "-j", "RETURN")
     _ipt("-t", "filter", "-A", "SANDBOXED_PI", "-j", "DROP")
 
     # IPv6: block all non-root outbound
