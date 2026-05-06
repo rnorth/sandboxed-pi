@@ -65,6 +65,13 @@ export default function (pi: ExtensionAPI) {
     default: "",
   });
 
+  pi.registerFlag("proxy-image", {
+    description:
+      "Pre-built local proxy image to use instead of pulling from ghcr.io. For development use.",
+    type: "string",
+    default: "",
+  });
+
   // -----------------------------------------------------------------------
   // Mutable state (resolved lazily when flags are available)
   // -----------------------------------------------------------------------
@@ -85,8 +92,9 @@ export default function (pi: ExtensionAPI) {
   async function startEgressProxy(
     policyFile: string,
     workloadContainer: string,
+    proxyImage?: string,
   ): Promise<{ proxyContainer: string; auditTailer: AbortController }> {
-    const proxyContainer = await createProxyContainer(policyFile, workloadContainer);
+    const proxyContainer = await createProxyContainer(policyFile, workloadContainer, proxyImage);
 
     const tailer = tailAuditLog(proxyContainer, (line) => {
       console.error(`[sandboxed-pi] [egress] ${line}`);
@@ -116,6 +124,7 @@ export default function (pi: ExtensionAPI) {
     const image = (pi.getFlag("sandbox-image") as string) || "ghcr.io/catthehacker/ubuntu:act-latest";
     const cwd = ctx.cwd;
     const policyFile = (pi.getFlag("egress-policy") as string) || "";
+    const proxyImageOverride = (pi.getFlag("proxy-image") as string) || undefined;
 
     // Validate egress policy before starting containers
     if (policyFile) {
@@ -171,7 +180,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Starting egress proxy — iptables + CA cert setup (up to ~30s)…`, "info");
       }
       try {
-        const result = await startEgressProxy(policyFile, container);
+        const result = await startEgressProxy(policyFile, container, proxyImageOverride);
         proxyContainer = result.proxyContainer;
         auditTailer = result.auditTailer;
 
