@@ -86,6 +86,7 @@ The image is rebuilt on first container creation, so changes take effect on the 
 | `--sandbox-image` | string | `ghcr.io/catthehacker/ubuntu:act-latest` | Base image used to build the per-user sandbox image |
 | `--no-sandbox` | boolean | `false` | Disable containerization; tools run on the host |
 | `--egress-policy <file>` | string | `""` | Path to a policy file for egress control (mitmproxy sidecar). See [egress control](#egress-control) for details. |
+| `--proxy-image` | string | `""` | Use a pre-built local proxy image instead of pulling from ghcr.io. For development. |
 
 ## Egress control
 
