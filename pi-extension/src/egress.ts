@@ -30,8 +30,10 @@ function getPackageVersion(): string {
  * Resolve the proxy image to use.
  *
  * If `proxyImage` is provided (via --proxy-image flag), use it as-is.
- * Otherwise pull ghcr.io/rnorth/sandboxed-pi/proxy:<version> and return it.
- * Throws if the pull fails — no local-build fallback.
+ * Otherwise ensure ghcr.io/rnorth/sandboxed-pi/proxy:<version> is available
+ * locally: skip the pull if already present, pull if missing, and throw if the
+ * pull fails. This avoids unnecessary registry round-trips and works in
+ * offline/air-gapped environments when the image is already cached.
  *
  * Note: `getPackageVersion()` is implicitly tested here because the unit
  * tests assert the resolved image name contains the semver tag from
@@ -43,6 +45,17 @@ export async function resolveProxyImage(proxyImage?: string): Promise<string> {
   }
   const version = getPackageVersion();
   const imageName = `${PROXY_IMAGE_REPO}:${version}`;
+
+  // Skip pull if the image is already present locally.
+  try {
+    const id = await dockerExecRaw(["image", "inspect", "-f", "{{.Id}}", imageName]);
+    if (id.toString().trim()) {
+      return imageName;
+    }
+  } catch {
+    // Image not present locally — fall through to pull.
+  }
+
   try {
     await dockerExecRaw(["pull", imageName]);
   } catch (err) {
@@ -51,10 +64,6 @@ export async function resolveProxyImage(proxyImage?: string): Promise<string> {
   }
   return imageName;
 }
-
-// NOTE: getPackageVersion() is implicitly tested here because the unit tests
-// assert the resolved image name contains the semver tag from package.json —
-// there's no need for a separate test on the helper.
 
 // ---------------------------------------------------------------------------
 // Container lifecycle
