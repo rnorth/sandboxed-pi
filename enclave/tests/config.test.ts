@@ -33,6 +33,21 @@ describe("loadConfig", () => {
     expect(cfg.networkPolicies).toBeUndefined();
   });
 
+  it("parses a config with no `image` key (defaults to undefined)", () => {
+    const path = writeConfig(`networkPolicies: []\n`);
+    const cfg = loadConfig(path);
+    expect(cfg.image).toBeUndefined();
+    expect(cfg.networkPolicies).toEqual([]);
+  });
+
+  it("parses an empty config (no keys at all)", () => {
+    const path = writeConfig(``);
+    const cfg = loadConfig(path);
+    expect(cfg.image).toBeUndefined();
+    expect(cfg.networkPolicies).toBeUndefined();
+    expect(cfg.defaultDenyActive()).toBe(true);
+  });
+
   it("parses a config with networkPolicies", () => {
     const path = writeConfig(`
 image: ubuntu:24.04
@@ -58,18 +73,6 @@ networkPolicies:
       expect(err).toBeInstanceOf(ConfigError);
       expect((err as ConfigError).code).toBe("missing");
       expect((err as ConfigError).message).toContain(path);
-    }
-  });
-
-  it("throws ConfigError with code 'invalid' for missing image key", () => {
-    const path = writeConfig(`networkPolicies: []\n`);
-    try {
-      loadConfig(path);
-      throw new Error("expected ConfigError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(ConfigError);
-      expect((err as ConfigError).code).toBe("invalid");
-      expect((err as ConfigError).message).toMatch(/image/i);
     }
   });
 

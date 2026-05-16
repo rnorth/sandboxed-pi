@@ -22,9 +22,9 @@ const NetworkPolicySchema = z.object({
 });
 
 const ConfigSchema = z.object({
-  image: z.string().min(1, "image is required"),
+  image: z.string().min(1).optional(),
   networkPolicies: z.array(NetworkPolicySchema).optional(),
-});
+}).nullable();
 
 export type Rule = z.infer<typeof RuleSchema>;
 export type NetworkPolicy = z.infer<typeof NetworkPolicySchema>;
@@ -45,7 +45,7 @@ export interface Config extends RawConfig {
   defaultDenyActive(): boolean;
 }
 
-const EXAMPLE_CONFIG = `image: ghcr.io/catthehacker/ubuntu:act-latest
+const EXAMPLE_CONFIG = `# image: ghcr.io/your/own-base:tag    # optional: override the curated base image
 
 # Optional. If omitted or empty, all outbound HTTP/HTTPS is blocked.
 networkPolicies:
@@ -83,7 +83,7 @@ export function loadConfig(path: string): Config {
     );
   }
 
-  const data = result.data;
+  const data = result.data || {};
   return {
     ...data,
     defaultDenyActive: () => !data.networkPolicies || data.networkPolicies.length === 0,
