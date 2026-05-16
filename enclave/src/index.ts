@@ -78,9 +78,13 @@ async function main(): Promise<number> {
     workload = await createSandboxContainer(imageName, process.cwd());
 
     // Always run an egress proxy: an explicit policy when present, a
-    // default-deny empty-policy otherwise.
+    // default-deny empty-policy otherwise. ENCLAVE_PROXY_IMAGE lets
+    // local dev/test override the ghcr.io image — useful when working
+    // on a branch where no proxy image is published for the current
+    // version yet.
     const policy = { networkPolicies: config.networkPolicies ?? [] };
-    const proxyResult = await createProxyContainerFromPolicy(policy, workload);
+    const proxyImageOverride = process.env.ENCLAVE_PROXY_IMAGE || undefined;
+    const proxyResult = await createProxyContainerFromPolicy(policy, workload, proxyImageOverride);
     proxy = proxyResult.proxyContainer;
     cleanupPolicyFile = proxyResult.cleanup;
 
