@@ -27,6 +27,7 @@ enclave -- pi
 
 ## Feature docs
 
-- **[CLI lifecycle and configuration](./container-configuration.md)** — config file schema, image build, cwd mount, host-user matching
-- **[Container sandbox](./container-sandbox.md)** — containment model, fail-closed behaviour
+- **[Configuration](./container-configuration.md)** — config file schema, cwd mount, environment overrides
+- **[Container image](./container-image.md)** — curated tool set, mise integration, two-stage image build, bring-your-own-base contract
+- **[Container sandbox](./container-sandbox.md)** — containment model, fail-closed behaviour, sandbox-bypass risks
 - **[Egress control](./egress-control.md)** — mitmproxy sidecar, policy format, limitations

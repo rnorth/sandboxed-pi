@@ -38,6 +38,25 @@ YAML
 enclave -- pi
 ```
 
+On first run, enclave builds its curated base image — takes a few minutes, then it's cached for every subsequent invocation.
+
+### Language runtimes
+
+The curated image ships [mise](https://mise.jdx.dev/) but **no language runtimes**. Keep your project's runtime versions in a checked-in `.mise.toml` and bring them in at the start of each enclave session:
+
+```toml
+# .mise.toml
+[tools]
+node = "22"
+python = "3.12"
+```
+
+```bash
+enclave -- bash -c "mise install && pi"
+```
+
+Container teardown is total — `mise install` results don't persist across invocations.
+
 ## Configuration
 
 `~/.config/enclave/config.yaml`:
@@ -52,7 +71,7 @@ networkPolicies:               # optional; missing/empty == default-deny
         method: GET | POST | ... | "*"
 ```
 
-See [`docs/container-configuration.md`](./docs/container-configuration.md) for the curated tool set, mise integration, and the override semantics.
+See [`docs/container-image.md`](./docs/container-image.md) for the curated tool set, mise integration, and the bring-your-own-base contract; [`docs/container-configuration.md`](./docs/container-configuration.md) for config file details.
 
 See [`docs/egress-control.md`](./docs/egress-control.md) for the full policy semantics and limitations.
 

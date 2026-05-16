@@ -23,3 +23,7 @@ Once the program is running inside `docker exec`, every subprocess it spawns —
 - Proxy fails to start → exit 1, workload is torn down first.
 
 There is no `--no-sandbox` opt-out. If you don't want a sandbox, don't use enclave.
+
+## Sandbox-bypass risks (do not enable)
+
+The curated image includes the **Docker CLI client**. The client alone is harmless — it can't talk to anything without a Docker daemon socket on the other end. Specifically: **never mount `/var/run/docker.sock` into the workload container.** Doing so gives the sandboxed program full control of the host's Docker daemon, which trivially escalates to host root (e.g., `docker run -v /:/host …`). enclave does not currently expose a mounts configuration; if one is added in the future, the Docker socket must not be a casual config toggle. Treat it as out-of-band, requires-justification, separate-from-normal-mounts.
