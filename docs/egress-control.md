@@ -1,10 +1,10 @@
 # Egress Control
 
-When `--egress-policy <file>` is set, a mitmproxy sidecar container filters all outbound HTTP/HTTPS traffic from the sandbox. Each request is evaluated against a per-host list of ALLOW/DENY rules; unmatched requests and unlisted hosts return `403 Access denied by egress policy`.
+A mitmproxy sidecar container filters all outbound HTTP/HTTPS traffic from the sandbox. Each request is evaluated against a per-host list of ALLOW/DENY rules taken from `config.yaml`; unmatched requests and unlisted hosts return `403 Access denied by egress policy`. With no `networkPolicies` in the config, the proxy default-denies everything — that is the fail-closed posture.
 
 ## Why a transparent proxy
 
-The sandbox container has unrestricted outbound network access by default. Without egress control, the agent can `curl` anywhere, `git push` to any host, install packages from any registry.
+Without egress control, a sandboxed program has unrestricted outbound network access. It can `curl` anywhere, `git push` to any host, install packages from any registry.
 
 Two approaches exist in the ecosystem, neither sufficient on its own:
 
@@ -26,27 +26,30 @@ Considered proxy alternatives:
 ## How it works
 
 ```
-pi --egress-policy policy.yaml
+enclave -- <program>
+  ├── workload container starts (cwd mounted, host user)
   ├── proxy container starts (NET_ADMIN, mitmproxy + iptables in entrypoint)
-  ├── workload container starts with --network container:<proxy>  (shared netns)
+  │     with --network container:<workload>  (shared netns)
+  ├── enclave serialises config.networkPolicies to a temp policy.yaml
+  │     and mounts it into the proxy
   └── iptables REDIRECT inside that netns sends TCP 80/443 to mitmproxy:8080
         (--uid-owner exempts the proxy's own upstream traffic)
 
-tool call → docker exec workload <cmd>
+docker exec workload <program>
   → kernel redirects sockets to mitmproxy (transparent, ignores HTTP_PROXY)
     → policy evaluation (ALLOW/DENY rules; default-deny → 403)
     → TLS-terminate, re-encrypt to upstream
     → audit log written to /var/log/sandboxed-pi/audit.log
 ```
 
-The audit log is tailed and printed to stderr (visible in the pi UI as info notifications) as requests are processed.
+The audit log is tailed and printed to enclave's stderr as requests are processed. (The proxy image internally still writes under `/var/log/sandboxed-pi/` — the proxy module hasn't been renamed yet.)
 
 Components:
 
 - **Proxy image** (`proxy/Dockerfile`) — `mitmproxy/mitmproxy` base, runs as non-root, installs iptables rules in the entrypoint.
 - **Policy addon** (`proxy/policy.py`) — loaded with `mitmdump -s`. Evaluates the policy file and writes a structured JSON audit log.
-- **Workload container** — unchanged from non-egress sessions, plus (a) trusts the mitmproxy CA via `update-ca-certificates`, (b) launched with `--network container:<proxy>`.
-- **Activation** — opt-in via `--egress-policy <file>`. If the proxy fails to come up, the session fails closed — same semantics as [container sandbox fail-closed](./container-sandbox.md#fail-closed).
+- **Workload container** — runs the user's program, plus (a) trusts the mitmproxy CA via `update-ca-certificates`, (b) launched with `--network container:<proxy>`.
+- **Activation** — always-on. If the proxy fails to come up, enclave fails closed — same semantics as [container sandbox fail-closed](./container-sandbox.md#fail-closed).
 
 ## Policy file format
 
@@ -89,7 +92,7 @@ networkPolicies:
 - If no rule matches, the request is **DENIED** (default-deny).
 - Hosts not listed in the policy are **DENIED**.
 
-The policy file is parsed at startup (using the `yaml` npm package, safe mode) so malformed files fail before containers start.
+The policy is read from `config.yaml` and validated at startup (zod schema) so malformed configs fail before any container starts.
 
 Considered policy format alternatives:
 
