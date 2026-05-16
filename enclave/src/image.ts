@@ -47,16 +47,8 @@ function locateDockerfileTemplate(): string {
 
 /**
  * Build (or rebuild) the per-user sandbox image and return its name.
- *
- * baseImage: the base Docker image to layer the per-user image on top of.
- *   When undefined, a default curated base is used (enclave-base:latest).
- *   TODO: implement ensureEnclaveBaseImage to build the curated base if absent.
  */
-export async function buildEnclaveImage(baseImage?: string): Promise<string> {
-  if (!baseImage) {
-    // TODO: call ensureEnclaveBaseImage() here once implemented
-    throw new Error("baseImage is required (curated base image build not yet implemented)");
-  }
+export async function buildEnclaveImage(baseImage: string): Promise<string> {
   const hostUser = getHostUser();
   const imageName = `enclave-${hostUser.name}:${hostUser.uid}`;
 
