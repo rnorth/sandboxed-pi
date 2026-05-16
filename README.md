@@ -6,7 +6,7 @@ Run any command inside an ephemeral Docker container, with optional egress filte
 $ enclave -- pi
 ```
 
-The supplied command runs inside a one-shot Docker container. The working directory is mounted at the same absolute path, the container runs as your host user (non-root, matching UID/GID), and outbound HTTP/HTTPS is filtered through a mitmproxy sidecar according to a policy in your config file.
+The supplied command runs inside a one-shot Docker container built from enclave's curated Ubuntu base (git, gh, docker CLI, jq, ripgrep, build tools, [mise](https://mise.jdx.dev/), …). The working directory is mounted at the same absolute path, the container runs as your host user (non-root, matching UID/GID), and outbound HTTP/HTTPS is filtered through a mitmproxy sidecar according to a policy in your config file.
 
 ## Philosophy
 
@@ -27,8 +27,6 @@ npm link    # installs `enclave` globally
 
 mkdir -p ~/.config/enclave
 cat > ~/.config/enclave/config.yaml <<'YAML'
-image: ghcr.io/catthehacker/ubuntu:act-latest
-
 networkPolicies:
   - host: api.github.com
     policies:
@@ -45,7 +43,7 @@ enclave -- pi
 `~/.config/enclave/config.yaml`:
 
 ```yaml
-image: <docker image>          # required
+image: <docker image>          # optional; defaults to enclave's curated base image
 networkPolicies:               # optional; missing/empty == default-deny
   - host: <hostname>
     policies:
@@ -53,6 +51,8 @@ networkPolicies:               # optional; missing/empty == default-deny
         path: <regex>          # Python re.fullmatch against the request path
         method: GET | POST | ... | "*"
 ```
+
+See [`docs/container-configuration.md`](./docs/container-configuration.md) for the curated tool set, mise integration, and the override semantics.
 
 See [`docs/egress-control.md`](./docs/egress-control.md) for the full policy semantics and limitations.
 
