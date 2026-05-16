@@ -9,9 +9,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, isAbsolute } from "node:path";
+import { stringify as yamlStringify } from "yaml";
 import { dockerExecRaw, isContainerRunning } from "./docker.js";
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,40 @@ export async function createProxyContainer(
   console.error(`[sandboxed-pi] [egress] Proxy setup complete. All egress traffic will be filtered.`);
 
   return proxyContainerName;
+}
+
+/**
+ * Create the proxy container from an in-memory policy object.
+ * Writes the object to a temp file (the proxy expects a file path)
+ * and delegates to createProxyContainer. The caller receives the
+ * proxy container name and a `cleanup()` to remove the temp file
+ * after the proxy has been destroyed.
+ */
+export async function createProxyContainerFromPolicy(
+  policy: { networkPolicies: unknown[] },
+  workloadContainerName: string,
+  proxyImageOverride?: string,
+): Promise<{ proxyContainer: string; cleanup: () => void }> {
+  const tmpDir = mkdtempSync(resolve(tmpdir(), "enclave-policy-"));
+  const policyFile = resolve(tmpDir, "policy.yaml");
+  writeFileSync(policyFile, yamlStringify(policy), "utf-8");
+
+  const proxyContainer = await createProxyContainer(
+    policyFile,
+    workloadContainerName,
+    proxyImageOverride,
+  );
+
+  return {
+    proxyContainer,
+    cleanup: () => {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    },
+  };
 }
 
 /**

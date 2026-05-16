@@ -18,6 +18,11 @@ import {
   destroySandboxContainer,
   dockerExecRaw,
 } from "./docker.js";
+import {
+  createProxyContainerFromPolicy,
+  destroyProxyContainer,
+  tailAuditLog,
+} from "./egress.js";
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config", "enclave", "config.yaml");
 
@@ -44,9 +49,8 @@ async function main(): Promise<number> {
     throw err;
   }
 
-  // Default-deny warning. Egress wiring lands in the next task; for now
-  // this is purely informational. Once egress is wired up the warning
-  // becomes accurate (no policies → no network access).
+  // Default-deny warning. Egress is always-on; with no policies the
+  // proxy boots in default-deny mode (everything blocked).
   if (config.defaultDenyActive()) {
     console.error(
       "[enclave] No networkPolicies in config — all outbound HTTP/HTTPS will be blocked.",
@@ -65,9 +69,24 @@ async function main(): Promise<number> {
   }
 
   let workload: string | undefined;
+  let proxy: string | undefined;
+  let auditTailer: AbortController | undefined;
+  let cleanupPolicyFile: (() => void) | undefined;
+
   try {
     const imageName = await buildEnclaveImage(config.image);
     workload = await createSandboxContainer(imageName, process.cwd());
+
+    // Always run an egress proxy: an explicit policy when present, a
+    // default-deny empty-policy otherwise.
+    const policy = { networkPolicies: config.networkPolicies ?? [] };
+    const proxyResult = await createProxyContainerFromPolicy(policy, workload);
+    proxy = proxyResult.proxyContainer;
+    cleanupPolicyFile = proxyResult.cleanup;
+
+    auditTailer = tailAuditLog(proxy, (line) => {
+      console.error(`[enclave] [egress] ${line}`);
+    });
 
     return await runInside(workload, parsed.innerCommand);
   } catch (err) {
@@ -75,6 +94,18 @@ async function main(): Promise<number> {
     console.error(`[enclave] ${cause}`);
     return 1;
   } finally {
+    if (auditTailer) auditTailer.abort();
+    // Proxy goes down before the workload: the workload's network
+    // namespace is shared with the proxy, so the order matters on
+    // teardown.
+    if (proxy) {
+      try {
+        await destroyProxyContainer(proxy);
+      } catch (err) {
+        const cause = err instanceof Error ? err.message : String(err);
+        console.error(`[enclave] cleanup: failed to destroy proxy ${proxy}: ${cause}`);
+      }
+    }
     if (workload) {
       try {
         await destroySandboxContainer(workload);
@@ -83,6 +114,7 @@ async function main(): Promise<number> {
         console.error(`[enclave] cleanup: failed to destroy workload ${workload}: ${cause}`);
       }
     }
+    if (cleanupPolicyFile) cleanupPolicyFile();
   }
 }
 
