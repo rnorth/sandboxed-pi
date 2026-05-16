@@ -199,7 +199,7 @@ describe.runIf(DOCKER_AVAILABLE)("createSandboxContainer", () => {
       testCwd,
     );
 
-    expect(containerName).toMatch(/^pi-sandboxed-/);
+    expect(containerName).toMatch(/^enclave-sandbox-/);
 
     await destroySandboxContainer(containerName);
   });
@@ -279,7 +279,7 @@ describe.runIf(DOCKER_AVAILABLE)("egress proxy – DNS interception", { timeout:
       execSync(`docker image inspect ${testProxyImage} > /dev/null`, { stdio: "pipe" });
     } catch {
       execSync(
-        `docker build -t ${testProxyImage} ./proxy`,
+        `docker build -t ${testProxyImage} ../proxy`,
         { stdio: "pipe" },
       );
     }

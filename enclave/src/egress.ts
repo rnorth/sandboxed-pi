@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve, isAbsolute } from "node:path";
+import { dirname, resolve, isAbsolute } from "node:path";
 import { dockerExecRaw, isContainerRunning } from "./docker.js";
 
 // ---------------------------------------------------------------------------
@@ -21,9 +21,20 @@ import { dockerExecRaw, isContainerRunning } from "./docker.js";
 const PROXY_IMAGE_REPO = "ghcr.io/rnorth/sandboxed-pi/proxy";
 
 function getPackageVersion(): string {
-  const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
-  return pkg.version;
+  // package.json lives at enclave/package.json. From src/egress.ts the
+  // relative path is ../package.json; from the compiled dist/src/egress.js
+  // it is ../../package.json. Probe both so the lookup works in either
+  // mode (vitest/tsx source vs installed bin).
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const rel of ["../package.json", "../../package.json"]) {
+    try {
+      const text = readFileSync(resolve(here, rel), "utf-8");
+      return (JSON.parse(text) as { version: string }).version;
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error("[enclave] could not locate package.json");
 }
 
 /**

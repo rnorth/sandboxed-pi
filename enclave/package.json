@@ -1,21 +1,19 @@
 {
-  "name": "sandboxed-pi",
+  "name": "enclave",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Docker container sandbox extension for pi — all tool execution runs inside an ephemeral container",
-  "keywords": [
-    "pi",
-    "extension",
-    "sandbox",
-    "docker"
-  ],
+  "description": "Docker container sandbox CLI — run any program inside an ephemeral container with optional egress filtering",
+  "keywords": ["sandbox", "docker", "egress", "containment"],
   "license": "MIT",
+  "bin": {
+    "enclave": "dist/src/index.js"
+  },
   "scripts": {
-    "test": "npm run test:proxy && vitest run --config pi-extension/vitest.config.ts",
-    "test:proxy": "sh scripts/test-proxy.sh",
-    "test:watch": "vitest --config pi-extension/vitest.config.ts",
-    "typecheck": "tsc --noEmit --project pi-extension/tsconfig.json"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
@@ -23,12 +21,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.72.1",
-    "yaml": "^2.6.1"
-  },
-  "pi": {
-    "extensions": [
-      "./pi-extension/src/index.ts"
-    ]
+    "yaml": "^2.6.1",
+    "zod": "^3.23.8"
   }
 }
