@@ -74,7 +74,7 @@ async function main(): Promise<number> {
   let cleanupPolicyFile: (() => void) | undefined;
 
   try {
-    const imageName = await buildEnclaveImage(config.image ?? "enclave-base:latest");
+    const imageName = await buildEnclaveImage(config.image);
     workload = await createSandboxContainer(imageName, process.cwd());
 
     // Always run an egress proxy: an explicit policy when present, a
