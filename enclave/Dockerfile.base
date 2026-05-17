@@ -1,0 +1,55 @@
+# enclave: curated base image.
+#
+# Slim Ubuntu carrying a small high-leverage tool set plus mise for
+# on-demand language runtime installs. Built as a shared intermediate
+# stage; the per-user layer (Dockerfile.template) is added on top.
+#
+# Tagged locally as enclave-base:latest. Publication to ghcr.io is a
+# future change.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Core + high-leverage CLI tools.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl wget gnupg \
+      git openssh-client less \
+      bash bash-completion \
+      jq ripgrep fd-find unzip xz-utils \
+      vim-tiny nano \
+      procps lsof dnsutils tree \
+      build-essential make \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# gh CLI (GitHub's official apt repo).
+RUN mkdir -p /etc/apt/keyrings \
+ && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update && apt-get install -y --no-install-recommends gh \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Docker CLI (client only).
+RUN install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+ && chmod a+r /etc/apt/keyrings/docker.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" \
+      > /etc/apt/sources.list.d/docker.list \
+ && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# mise (upstream apt repo).
+RUN install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://mise.jdx.dev/gpg-key.pub \
+      | gpg --dearmor -o /etc/apt/keyrings/mise-archive-keyring.gpg \
+ && echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.gpg arch=$(dpkg --print-architecture)] https://mise.jdx.dev/deb stable main" \
+      > /etc/apt/sources.list.d/mise.list \
+ && apt-get update && apt-get install -y --no-install-recommends mise \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Auto-activate mise for interactive bash shells only.
+RUN echo 'case $- in *i*) eval "$(mise activate bash)" ;; esac' >> /etc/bash.bashrc
