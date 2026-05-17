@@ -90,7 +90,8 @@ describe.runIf(DOCKER_AVAILABLE)("enclave end-to-end", { timeout: 600_000 }, () 
     const result = runEnclave(["--", "echo", "hi"]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("No config at");
-    expect(result.stderr).toMatch(/image:.*\n/);
+    expect(result.stderr).toMatch(/networkPolicies:/);
+    expect(result.stderr).toMatch(/optional: override the curated base image/);
   });
 
   it("runs the inner program and propagates stdout and exit code (default-deny)", () => {
@@ -110,4 +111,13 @@ describe.runIf(DOCKER_AVAILABLE)("enclave end-to-end", { timeout: 600_000 }, () 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("blocked");
   });
+
+  it("runs against the curated base image when config has no image key", () => {
+    writeConfig(`networkPolicies: []\n`);
+    const result = runEnclave(["--", "bash", "-c", "command -v mise && command -v gh && command -v jq"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("/usr/bin/mise");
+    expect(result.stdout).toContain("/usr/bin/gh");
+    expect(result.stdout).toContain("/usr/bin/jq");
+  }, 600_000);
 });
