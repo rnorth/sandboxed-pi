@@ -1,74 +1,13 @@
 /**
- * Low-level Docker helpers: container lifecycle and docker exec
+ * Low-level Docker helpers: container lifecycle and docker exec.
+ *
+ * Per-user image building has moved to image.ts. Callers of
+ * createSandboxContainer are responsible for supplying a pre-built
+ * image (typically via image.ts:buildEnclaveImage).
  */
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-
-// ---------------------------------------------------------------------------
-// Host user info
-// ---------------------------------------------------------------------------
-
-/**
- * Host user info needed for non-root container execution.
- */
-export interface HostUser {
-  name: string;
-  uid: number;
-  gid: number;
-  home: string;
-}
-
-/**
- * Get the current user's info from the host system.
- */
-function getHostUser(): HostUser {
-  const name = process.env.USER ?? process.env.USERNAME ?? "root";
-  const uid = process.getuid?.() ?? 0;
-  const gid = process.getgid?.() ?? 0;
-  const home = process.env.HOME ?? "/root";
-  return { name, uid, gid, home };
-}
-
-// ---------------------------------------------------------------------------
-// Custom image builder
-// ---------------------------------------------------------------------------
-
-/**
- * Build a custom container image with the host user baked in.
- * Returns the image name to use for containers.
- */
-async function buildSandboxImage(
-  hostUser: HostUser,
-  baseImage: string,
-  imageName: string,
-): Promise<string> {
-  // Read the Dockerfile template
-  const templatePath = resolve(__dirname, "..", "Dockerfile.template");
-  let dockerfile = readFileSync(templatePath, "utf-8");
-
-  // Replace the build arguments with actual values
-  dockerfile = dockerfile.replace(/\$\{USER_NAME\}/g, hostUser.name);
-  dockerfile = dockerfile.replace(/\$\{USER_UID\}/g, String(hostUser.uid));
-  dockerfile = dockerfile.replace(/\$\{USER_GID\}/g, String(hostUser.gid));
-  dockerfile = dockerfile.replace(/\$\{USER_HOME\}/g, hostUser.home);
-
-  // Build the Docker image
-  await dockerExecRaw([
-    "build",
-    "--build-arg", `USER_NAME=${hostUser.name}`,
-    "--build-arg", `USER_UID=${hostUser.uid}`,
-    "--build-arg", `USER_GID=${hostUser.gid}`,
-    "--build-arg", `USER_HOME=${hostUser.home}`,
-    "-t", imageName,
-    "-f", "-",
-    resolve(__dirname, ".."),
-  ], dockerfile);
-
-  return imageName;
-}
 
 // ---------------------------------------------------------------------------
 // Container lifecycle
@@ -77,37 +16,28 @@ async function buildSandboxImage(
 /**
  * Create and start a sandbox container.
  * Mounts cwd at the same absolute path inside the container.
- * Runs as the host user (not root) for safety.
+ * The caller is responsible for supplying a pre-built image (e.g. via
+ * image.ts:buildEnclaveImage) that contains a user matching the host UID/GID.
  */
 export async function createSandboxContainer(
   image: string,
   cwd: string,
   containerName?: string,
 ): Promise<string> {
-  const name = containerName ?? `pi-sandboxed-${randomUUID().slice(0, 8)}`;
-  const hostUser = getHostUser();
+  const name = containerName ?? `enclave-sandbox-${randomUUID().slice(0, 8)}`;
 
-  // Build custom image with the host user baked in
-  const customImage = `pi-sandbox-${hostUser.name}:${hostUser.uid}`;
-  await buildSandboxImage(hostUser, image, customImage);
-
-  // Create and start container using the custom image
   const dockerArgs = [
     "run",
     "-d",
     "--rm",
     "--name", name,
     "-v", cwd + ":" + cwd + ":rw",
-    customImage,
+    image,
     "sleep", "infinity",
   ];
 
-  const result = await dockerExecRaw(dockerArgs);
-  result.toString().trim(); // consumed for error checking
-
-  // Verify it's running
+  await dockerExecRaw(dockerArgs);
   await waitForContainerRunning(name, 10_000);
-
   return name;
 }
 

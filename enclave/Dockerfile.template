@@ -1,0 +1,36 @@
+# Per-user enclave image. Layered on top of either the curated base
+# (enclave-base:latest, the default) or a user-supplied image set via
+# config.image.
+#
+# Bakes in the host user's UID/GID/name so files created inside the
+# sandbox are owned by the host user. The curated tool set lives in
+# the base image; this layer is intentionally small.
+#
+# The base image must be Debian/Ubuntu-derived (useradd/groupadd are
+# used) and must include /bin/bash (the login shell is set to bash so
+# mise's activation hook fires for interactive shells).
+
+ARG BASE_IMAGE=enclave-base:latest
+FROM ${BASE_IMAGE}
+
+ARG USER_NAME
+ARG USER_UID
+ARG USER_GID
+
+# Create a group + user matching the host UID/GID/name so files
+# created inside the sandbox are owned by the host user.
+# -f on groupadd tolerates a pre-existing group with that GID;
+# -m on useradd creates the home directory.
+RUN (getent group ${USER_GID} || groupadd -f -g ${USER_GID} ${USER_NAME}) \
+ && useradd -u ${USER_UID} -g ${USER_GID} -m -d /home/${USER_NAME} -s /bin/bash ${USER_NAME}
+
+ENV HOME=/home/${USER_NAME}
+ENV USER=${USER_NAME}
+# Put mise's shims directory on PATH so mise-installed binaries
+# resolve for non-shell subprocesses (e.g. `enclave -- node x.js`).
+# The bash.bashrc activation hook from the base image handles the
+# interactive case.
+ENV PATH=/home/${USER_NAME}/.local/share/mise/shims:${PATH}
+
+USER ${USER_NAME}
+CMD ["sleep", "infinity"]

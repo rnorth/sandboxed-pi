@@ -9,9 +9,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { resolve, isAbsolute } from "node:path";
+import { dirname, resolve, isAbsolute } from "node:path";
+import { stringify as yamlStringify } from "yaml";
 import { dockerExecRaw, isContainerRunning } from "./docker.js";
 
 // ---------------------------------------------------------------------------
@@ -21,9 +23,20 @@ import { dockerExecRaw, isContainerRunning } from "./docker.js";
 const PROXY_IMAGE_REPO = "ghcr.io/rnorth/sandboxed-pi/proxy";
 
 function getPackageVersion(): string {
-  const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
-  return pkg.version;
+  // package.json lives at enclave/package.json. From src/egress.ts the
+  // relative path is ../package.json; from the compiled dist/src/egress.js
+  // it is ../../package.json. Probe both so the lookup works in either
+  // mode (vitest/tsx source vs installed bin).
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const rel of ["../package.json", "../../package.json"]) {
+    try {
+      const text = readFileSync(resolve(here, rel), "utf-8");
+      return (JSON.parse(text) as { version: string }).version;
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error("[enclave] could not locate package.json");
 }
 
 /**
@@ -130,6 +143,40 @@ export async function createProxyContainer(
   console.error(`[sandboxed-pi] [egress] Proxy setup complete. All egress traffic will be filtered.`);
 
   return proxyContainerName;
+}
+
+/**
+ * Create the proxy container from an in-memory policy object.
+ * Writes the object to a temp file (the proxy expects a file path)
+ * and delegates to createProxyContainer. The caller receives the
+ * proxy container name and a `cleanup()` to remove the temp file
+ * after the proxy has been destroyed.
+ */
+export async function createProxyContainerFromPolicy(
+  policy: { networkPolicies: unknown[] },
+  workloadContainerName: string,
+  proxyImageOverride?: string,
+): Promise<{ proxyContainer: string; cleanup: () => void }> {
+  const tmpDir = mkdtempSync(resolve(tmpdir(), "enclave-policy-"));
+  const policyFile = resolve(tmpDir, "policy.yaml");
+  writeFileSync(policyFile, yamlStringify(policy), "utf-8");
+
+  const proxyContainer = await createProxyContainer(
+    policyFile,
+    workloadContainerName,
+    proxyImageOverride,
+  );
+
+  return {
+    proxyContainer,
+    cleanup: () => {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    },
+  };
 }
 
 /**
