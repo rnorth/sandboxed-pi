@@ -1,36 +1,36 @@
-# Dockerfile template for enclave.
+# Per-user enclave image. Layered on top of either the curated base
+# (enclave-base:latest, the default) or a user-supplied image set via
+# config.image.
 #
-# Builds a derivative of the user-supplied base image (config.image)
-# with the host user's UID/GID/name baked in. The gh CLI is also
-# installed for git workflows commonly run inside enclave sandboxes.
+# Bakes in the host user's UID/GID/name so files created inside the
+# sandbox are owned by the host user. The curated tool set lives in
+# the base image; this layer is intentionally small.
 #
-# The base image must be Debian/Ubuntu-derived (apt-get is used).
+# The base image must be Debian/Ubuntu-derived (useradd/groupadd are
+# used) and must include /bin/bash (the login shell is set to bash so
+# mise's activation hook fires for interactive shells).
 
-ARG BASE_IMAGE=ghcr.io/catthehacker/ubuntu:act-latest
+ARG BASE_IMAGE=enclave-base:latest
 FROM ${BASE_IMAGE}
 
 ARG USER_NAME
 ARG USER_UID
 ARG USER_GID
 
-# Install gh CLI (also pulls in wget as a side-effect).
-RUN (type -p wget >/dev/null || (apt-get update && apt-get install -y wget)) >/dev/null \
-    && mkdir -p /etc/apt/keyrings \
-    && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-    && apt-get update && apt-get install -y gh \
-    && apt-get clean
-
 # Create a group + user matching the host UID/GID/name so files
 # created inside the sandbox are owned by the host user.
 # -f on groupadd tolerates a pre-existing group with that GID;
 # -m on useradd creates the home directory.
 RUN (getent group ${USER_GID} || groupadd -f -g ${USER_GID} ${USER_NAME}) \
-    && useradd -u ${USER_UID} -g ${USER_GID} -m -d /home/${USER_NAME} -s /bin/sh ${USER_NAME}
+ && useradd -u ${USER_UID} -g ${USER_GID} -m -d /home/${USER_NAME} -s /bin/bash ${USER_NAME}
 
 ENV HOME=/home/${USER_NAME}
 ENV USER=${USER_NAME}
+# Put mise's shims directory on PATH so mise-installed binaries
+# resolve for non-shell subprocesses (e.g. `enclave -- node x.js`).
+# The bash.bashrc activation hook from the base image handles the
+# interactive case.
+ENV PATH=/home/${USER_NAME}/.local/share/mise/shims:${PATH}
 
 USER ${USER_NAME}
 CMD ["sleep", "infinity"]

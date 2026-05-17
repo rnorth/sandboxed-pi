@@ -77,4 +77,37 @@ describe.runIf(DOCKER_AVAILABLE)("buildEnclaveImage", { timeout: 600_000 }, () =
       execSync(`docker image inspect ${ENCLAVE_BASE_IMAGE_TAG}`, { stdio: "pipe" }),
     ).not.toThrow();
   });
+
+  it("default (no baseImage) chains curated build and produces an image with the curated tool set", async () => {
+    const built = await buildEnclaveImage();
+    expect(built).toBe(expectedImage);
+
+    // The resulting per-user image should carry the curated tool set
+    // because the curated base is its parent.
+    const checkCmd = "bash -lc 'command -v mise && command -v gh && command -v docker && command -v jq && command -v make'";
+    const out = execSync(
+      `docker run --rm ${built} ${checkCmd}`,
+      { stdio: ["pipe", "pipe", "pipe"] },
+    ).toString();
+    expect(out).toMatch(/\/usr\/bin\/mise/);
+    expect(out).toMatch(/\/usr\/bin\/gh/);
+    expect(out).toMatch(/\/usr\/bin\/docker/);
+    expect(out).toMatch(/\/usr\/bin\/jq/);
+    expect(out).toMatch(/\/usr\/bin\/make/);
+  });
+
+  it("login shell is bash and mise shims are on PATH", async () => {
+    const built = await buildEnclaveImage();
+    const shell = execSync(
+      `docker run --rm ${built} getent passwd ${user.name}`,
+      { stdio: ["pipe", "pipe", "pipe"] },
+    ).toString().trim();
+    expect(shell).toMatch(/:\/bin\/bash$/);
+
+    const path = execSync(
+      `docker run --rm ${built} sh -c 'echo $PATH'`,
+      { stdio: ["pipe", "pipe", "pipe"] },
+    ).toString().trim();
+    expect(path).toContain(`/home/${user.name}/.local/share/mise/shims`);
+  });
 });
